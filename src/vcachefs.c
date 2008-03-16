@@ -30,9 +30,18 @@
 
 #include "vcachefs.h"
 
+static struct vcachefs_fdentry* fdentry_new(void)
+{
+}
+
+static void fdentry_free(struct vcachefs_fdentry* obj)
+{
+}
+
 static void* vcachefs_init(struct fuse_conn_info *conn)
 {
-	// TODO: Implement me
+	struct vcachefs_mount* mount_object = g_new(struct vcachefs_mount, 1);
+	mount_object->source_path = "/Developer";
 }
 
 static void vcachefs_destroy(void *mount_object)
@@ -44,6 +53,7 @@ static int vcachefs_getattr(const char *path, struct stat *stbuf)
 {
 	int res = 0;
 
+	/*
 	memset(stbuf, 0, sizeof(struct stat));
 	if(strcmp(path, "/") == 0) {
 		stbuf->st_mode = S_IFDIR | 0755;
@@ -56,17 +66,20 @@ static int vcachefs_getattr(const char *path, struct stat *stbuf)
 	}
 	else
 		res = -ENOENT;
+	*/
 
 	return res;
 }
 
 static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 {
+	/*
 	if(strcmp(path, vcachefs_path) != 0)
 		return -ENOENT;
 
 	if((fi->flags & 3) != O_RDONLY)
 		return -EACCES;
+	*/
 
 	return 0;
 }
@@ -74,6 +87,7 @@ static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 static int vcachefs_read(const char *path, char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi)
 {
+	/*
 	size_t len;
 	(void) fi;
 	if(strcmp(path, vcachefs_path) != 0)
@@ -86,6 +100,7 @@ static int vcachefs_read(const char *path, char *buf, size_t size, off_t offset,
 		memcpy(buf, vcachefs_str + offset, size);
 	} else
 		size = 0;
+	*/
 
 	return size;
 }
@@ -111,6 +126,7 @@ static int vcachefs_access(const char *path, int amode)
 static int vcachefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		off_t offset, struct fuse_file_info *fi)
 {
+	/*
 	(void) offset;
 	(void) fi;
 
@@ -120,6 +136,7 @@ static int vcachefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	filler(buf, ".", NULL, 0);
 	filler(buf, "..", NULL, 0);
 	filler(buf, vcachefs_path + 1, NULL, 0);
+	*/
 
 	return 0;
 }

@@ -24,25 +24,27 @@
 #ifndef _VCACHEFS_H
 #define _VCACHEFS_H
 
+#include <glib.h>
+
 /* This object is the per-mount data we carry around with us throughout the 
  * life of the app until we release it */
 struct vcachefs_mount {
-	const char* 	source_path,	
+	char* source_path;
 	
 	/* File descriptor table */
-	GHashTable* 	fd_table,
-	GStaticRWLock 	fd_table_rwlock,
+	GHashTable* fd_table;
+	GStaticRWLock fd_table_rwlock;
 };
 
 struct vcachefs_fdentry {
-	int fd,
-	int source_fd,
+	int fd;
+	int source_fd;
 };
 
 
 /* Function declarations */
 
 static struct vcachefs_fdentry* fdentry_new(void);
-static fdentry_free(struct vcachefs_fdentry* obj);
+static void fdentry_free(struct vcachefs_fdentry* obj);
 
 #endif 
