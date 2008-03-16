@@ -29,22 +29,20 @@
 /* This object is the per-mount data we carry around with us throughout the 
  * life of the app until we release it */
 struct vcachefs_mount {
-	char* source_path;
+	const char* 	source_path;
 	
 	/* File descriptor table */
-	GHashTable* fd_table;
-	GStaticRWLock fd_table_rwlock;
+	GHashTable* 	fd_table;
+	uint 		next_fd;
+	GStaticRWLock 	fd_table_rwlock;
 };
 
 struct vcachefs_fdentry {
-	int fd;
-	int source_fd;
+	gint 		refcnt; 
+	uint 	 	fd;
+
+	uint64_t 	source_fd;
+	off_t 		source_offset;
 };
-
-
-/* Function declarations */
-
-static struct vcachefs_fdentry* fdentry_new(void);
-static void fdentry_free(struct vcachefs_fdentry* obj);
 
 #endif 
