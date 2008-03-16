@@ -1,3 +1,6 @@
+Done:
+	* Hello world, build system
+	
 Milestones to 1.0
 	* Simple mirror (pass all through to target)
 	* Bookkeeping (grok settings, set up cache directory, etc)
