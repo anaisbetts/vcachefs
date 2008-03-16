@@ -20,8 +20,10 @@ to run quickly without requiring the entire file to be on-disk.
 
 To build:
 ----------
+ 
+# If MacFuse
+export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/opt/local/lib/pkgconfig  
 
-export PKG_CONFIG_PATH=/usr/local   # If MacFuse
 ./autogen.sh --prefix=/usr/local
 make && sudo make install
 

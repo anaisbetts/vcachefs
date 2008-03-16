@@ -9,7 +9,7 @@ bin_PROGRAMS = vcachefs
 
 AM_CFLAGS = -std=c99 -g -O0
 
-vcachefs_LDADD = $(VCACHEFS_LIBS)
+vcachefs_LDADD = $(VCACHEFS_LIBS) -lpthread
 
 vcachefs_SOURCES = \
 	vcachefs.c
