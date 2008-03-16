@@ -1,0 +1,37 @@
+What is vcachefs?
+-----------------
+
+Video/Audio Caching Filesystem (vcachefs) is a FUSE-based filesystem for *nix
+and Mac OS X that is designed to "mirror" a remote filesystem while caching a
+certain number of files locally. Essentially, its goal is to solve the "iTunes
+sucks balls over 802.11" problem. 
+
+Right now, this code is far from finished, but the idea is that you will give it
+a target directory to mirror and a mountpoint, and you point media apps toward
+the mountpoint instead of the net filesystem itself. I am planning to implement
+two kinds of caches:
+
+	* A file-atomic cache
+	* A block-based cache for the first 1k of the file and the STAT struct
+
+The latter allows media apps who are only querying tag information / file stats
+to run quickly without requiring the entire file to be on-disk.
+
+
+To build:
+----------
+
+export PKG_CONFIG_PATH=/usr/local   # If MacFuse
+./autogen.sh --prefix=/usr/local
+make && sudo make install
+
+Requires:
+	* pkg-config, autotools
+	* glib >= 2.9
+	* A recent version of FUSE (API >= v27)
+
+
+To run (doesn't do anything yet though!)
+-----------------------------------------
+
+./vcachefs /target/mount/point
