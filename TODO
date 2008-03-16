@@ -1,8 +1,8 @@
 Done:
 	* Hello world, build system
+	* Simple mirror (pass all through to target)
 	
 Milestones to 1.0
-	* Simple mirror (pass all through to target)
 	* Bookkeeping (grok settings, set up cache directory, etc)
 	* File-based cache
 		* Async worker thread saving off files
