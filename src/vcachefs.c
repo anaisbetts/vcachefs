@@ -29,6 +29,7 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <sys/statvfs.h>
+#include <dirent.h>
 #include <unistd.h>
 #include <glib.h>
 
@@ -69,7 +70,7 @@ static struct vcachefs_fdentry* fdentry_from_fd(uint fd)
 	struct vcachefs_mount* mount_obj = get_current_mountinfo();
 
 	g_static_rw_lock_reader_lock(&mount_obj->fd_table_rwlock);
-	ret = g_hash_table_lookup(mount_obj->fd_table, (gconstpointer)fd);
+	ret = g_hash_table_lookup(mount_obj->fd_table, &fd);
 	g_static_rw_lock_reader_unlock(&mount_obj->fd_table_rwlock);
 
 	return (ret ? fdentry_ref(ret) : NULL);
@@ -88,6 +89,7 @@ static void* vcachefs_init(struct fuse_conn_info *conn)
 	/* Create the file descriptor table */
 	mount_object->fd_table = g_hash_table_new(g_int_hash, g_int_equal);
 	g_static_rw_lock_init(&mount_object->fd_table_rwlock);
+	mount_object->next_fd = 4;
 
 	return mount_object;
 }
@@ -111,7 +113,7 @@ static void vcachefs_destroy(void *mount_object_ptr)
 static int vcachefs_getattr(const char *path, struct stat *stbuf)
 {
 	int ret = 0; 
-	const struct vcachefs_mount* mount_obj = get_current_mountinfo();
+	struct vcachefs_mount* mount_obj = get_current_mountinfo();
 
 	if(path == NULL || strlen(path) == 0)
 		return -ENOENT;
@@ -129,6 +131,7 @@ static int vcachefs_getattr(const char *path, struct stat *stbuf)
 static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 {
 	struct vcachefs_mount* mount_obj = get_current_mountinfo();
+	struct vcachefs_fdentry* fde = NULL;
 
 	if(path == NULL || strlen(path) == 0)
 		return -ENOENT;
@@ -140,16 +143,17 @@ static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 		return source_fd;
 
 	/* Open succeeded - time to create a fdentry */
-	struct vcachefs_fdentry* fde = fdentry_new();
+	fde = fdentry_new();
 	g_static_rw_lock_writer_lock(&mount_obj->fd_table_rwlock);
 	fde->source_fd = source_fd;
 	fi->fh = fde->fd = mount_obj->next_fd;
 	mount_obj->next_fd++;
-	g_hash_table_insert((gpointer)mount_obj->fd_table, fde->fd, fde);
+	g_hash_table_insert(mount_obj->fd_table, &fde->fd, fde);
 	g_static_rw_lock_writer_unlock(&mount_obj->fd_table_rwlock);
 
 	return 0;
 }
+
 
 static int vcachefs_read(const char *path, char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi)
@@ -186,11 +190,14 @@ static int vcachefs_statfs(const char *path, struct statvfs *stat)
 
 static int vcachefs_release(const char *path, struct fuse_file_info *info)
 {
-	/* Remove the entry from the fd table */
 	struct vcachefs_mount* mount_obj = get_current_mountinfo();
+	struct vcachefs_fdentry* fde = NULL;
+
+	/* Remove the entry from the fd table */
 	g_static_rw_lock_writer_lock(&mount_obj->fd_table_rwlock);
-	struct vcachefs_fdentry* fde = g_hash_table_lookup(mount_obj->fd_table, (gpointer)info->fh);
-	g_hash_table_remove(mount_obj->fd_table, (gpointer)info->fh);
+	fde = g_hash_table_lookup(mount_obj->fd_table, &info->fh);
+	if (fde)
+		g_hash_table_remove(mount_obj->fd_table, &info->fh);
 	g_static_rw_lock_writer_unlock(&mount_obj->fd_table_rwlock);
 
 	if(!fde)
@@ -205,7 +212,7 @@ static int vcachefs_release(const char *path, struct fuse_file_info *info)
 static int vcachefs_access(const char *path, int amode)
 {
 	int ret = 0; 
-	const struct vcachefs_mount* mount_obj = get_current_mountinfo();
+	struct vcachefs_mount* mount_obj = get_current_mountinfo();
 
 	if(path == NULL || strlen(path) == 0)
 		return -ENOENT;
@@ -224,6 +231,13 @@ static int vcachefs_access(const char *path, int amode)
 static int vcachefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		off_t offset, struct fuse_file_info *fi)
 {
+	int ret;
+	gchar* full_path;
+	struct vcachefs_mount* mount_obj = get_current_mountinfo();
+	DIR* dir;
+	struct dirent* dentry;
+	char path_buf[NAME_MAX];
+
 	/*
 	(void) offset;
 	(void) fi;
@@ -236,6 +250,33 @@ static int vcachefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	filler(buf, vcachefs_path + 1, NULL, 0);
 	*/
 
+	if(path == NULL || strlen(path) == 0)
+		return -ENOENT;
+
+	if(strcmp(path, "/") == 0) {
+		full_path = g_strdup(mount_obj->source_path);
+	} else {
+		full_path = g_strdup_printf("%s/%s", mount_obj->source_path, &path[1]);
+	}
+	
+	/* Open the directory and read through it */
+	if ((dir = opendir(full_path)) == NULL)
+		return -ENOENT;
+
+	while((dentry = readdir(dir))) {
+		struct stat stbuf;
+		int stat_ret;
+
+		/* Stat the file */
+		snprintf(path_buf, NAME_MAX, "%s/%s", full_path, dentry->d_name);
+		stat_ret = stat(path_buf, &stbuf);
+
+		if ((ret = filler(buf, dentry->d_name, (stat_ret>=0 ? &stbuf : NULL), 0)))
+			goto out;
+	}
+
+out:
+	closedir(dir);
 	return 0;
 }
 
