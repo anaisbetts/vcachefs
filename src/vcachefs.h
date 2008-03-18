@@ -35,6 +35,9 @@ struct vcachefs_mount {
 	GHashTable* 	fd_table;
 	uint 		next_fd;
 	GStaticRWLock 	fd_table_rwlock;
+
+	/* File-based caching */
+	GAsyncQueue* 	file_copy_queue;
 };
 
 struct vcachefs_fdentry {
@@ -43,6 +46,9 @@ struct vcachefs_fdentry {
 
 	uint64_t 	source_fd;
 	off_t 		source_offset;
+
+	uint64_t 	filecache_fd;
+	off_t 		filecache_offset;
 };
 
 #endif 

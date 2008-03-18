@@ -60,8 +60,13 @@ static struct vcachefs_fdentry* fdentry_ref(struct vcachefs_fdentry* obj)
 
 static void fdentry_unref(struct vcachefs_fdentry* obj)
 {
-	if(g_atomic_int_dec_and_test(&obj->refcnt))
+	if(g_atomic_int_dec_and_test(&obj->refcnt)) {
+		if(obj->source_fd > 0)
+			close(obj->source_fd);
+		if(obj->filecache_fd > 0)
+			close(obj->filecache_fd);
 		g_free(obj);
+	}
 }
 
 static struct vcachefs_fdentry* fdentry_from_fd(uint fd)
@@ -89,6 +94,7 @@ static void* vcachefs_init(struct fuse_conn_info *conn)
 	/* Create the file descriptor table */
 	mount_object->fd_table = g_hash_table_new(g_int_hash, g_int_equal);
 	g_static_rw_lock_init(&mount_object->fd_table_rwlock);
+	mount_object->file_copy_queue = g_async_queue_new();
 	mount_object->next_fd = 4;
 
 	return mount_object;
@@ -102,6 +108,8 @@ static void trash_fdtable_item(gpointer key, gpointer val, gpointer dontcare)
 static void vcachefs_destroy(void *mount_object_ptr)
 {
 	struct vcachefs_mount* mount_object = mount_object_ptr;
+
+	g_async_queue_unref(mount_object->file_copy_queue;
 
 	/* XXX: We need to make sure no one is using this before we trash it */
 	g_hash_table_foreach(mount_object->fd_table, trash_fdtable_item, NULL);
@@ -237,18 +245,6 @@ static int vcachefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	DIR* dir;
 	struct dirent* dentry;
 	char path_buf[NAME_MAX];
-
-	/*
-	(void) offset;
-	(void) fi;
-
-	if(strcmp(path, "/") != 0)
-		return -ENOENT;
-
-	filler(buf, ".", NULL, 0);
-	filler(buf, "..", NULL, 0);
-	filler(buf, vcachefs_path + 1, NULL, 0);
-	*/
 
 	if(path == NULL || strlen(path) == 0)
 		return -ENOENT;
