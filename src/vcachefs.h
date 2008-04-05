@@ -42,6 +42,8 @@ struct vcachefs_mount {
 
 struct vcachefs_fdentry {
 	gint 		refcnt; 
+
+	char* 		relative_path;
 	uint 	 	fd;
 
 	uint64_t 	source_fd;

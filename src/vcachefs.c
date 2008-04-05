@@ -65,6 +65,7 @@ static void fdentry_unref(struct vcachefs_fdentry* obj)
 			close(obj->source_fd);
 		if(obj->filecache_fd > 0)
 			close(obj->filecache_fd);
+		g_free(obj->relative_path);
 		g_free(obj);
 	}
 }
@@ -86,25 +87,6 @@ static struct vcachefs_fdentry* fdentry_from_fd(uint fd)
  * File-based cache functions
  */
 
-struct file_queue_entry {
-	int fd;
-	char* path;
-};
-
-static struct file_queue_entry* file_queue_entry_new(int fd, const char* path)
-{
-	struct file_queue_entry* ret = g_new0(struct file_queue_entry, 1);
-	ret->fd = fd;
-	ret->path = strdup(path);
-	return ret;
-}
-
-static void file_queue_entry_free(struct file_queue_entry* obj)
-{
-	g_free(obj->path);
-	g_free(obj);
-}
-
 static int try_open_from_cache(char* cache_root, char* relative_path, int flags)
 {
 	gchar* path = g_build_filename(cache_root, relative_path, NULL);
@@ -112,10 +94,6 @@ static int try_open_from_cache(char* cache_root, char* relative_path, int flags)
 	g_free(path);
 
 	return ret;
-}
-
-static int copy_file_and_return_destfd(char* src, char* dest)
-{
 }
 
 static gpointer file_cache_copy_thread(gpointer data)
@@ -154,7 +132,7 @@ done:
 		file_queue_entry_free(item);
 	}
 
-	g_atomic_int_set(&mount_obj->quitflag_atomic, 2);
+	return NULL;
 }
 
 
@@ -168,15 +146,14 @@ static void* vcachefs_init(struct fuse_conn_info *conn)
 	mount_object->source_path = "/etc"; 		/* XXX: Obviously dumb */
 	mount_object->cache_path = "/home/paul/.vcachefs"; 		/* XXX: Ditto */
 
+	g_thread_init(NULL);
+
 	/* Create the file descriptor table */
 	mount_object->fd_table = g_hash_table_new(g_int_hash, g_int_equal);
 	g_static_rw_lock_init(&mount_object->fd_table_rwlock);
-	mount_object->file_copy_queue = g_async_queue_new();
 	mount_object->next_fd = 4;
 
-
 	/* Set up the file cache thread */
-	g_thread_init(NULL);
 	mount_object->file_copy_queue = g_async_queue_new();
 
 	return mount_object;
@@ -241,6 +218,7 @@ static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 	/* Open succeeded - time to create a fdentry */
 	fde = fdentry_new();
 	g_static_rw_lock_writer_lock(&mount_obj->fd_table_rwlock);
+	fde->relative_path = g_strdup(path);
 	fde->source_fd = source_fd;
 	fde->source_offset = 0;
 	fi->fh = fde->fd = mount_obj->next_fd;
