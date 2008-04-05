@@ -83,6 +83,82 @@ static struct vcachefs_fdentry* fdentry_from_fd(uint fd)
 
 
 /*
+ * File-based cache functions
+ */
+
+struct file_queue_entry {
+	int fd;
+	char* path;
+};
+
+static struct file_queue_entry* file_queue_entry_new(int fd, const char* path)
+{
+	struct file_queue_entry* ret = g_new0(struct file_queue_entry, 1);
+	ret->fd = fd;
+	ret->path = strdup(path);
+	return ret;
+}
+
+static void file_queue_entry_free(struct file_queue_entry* obj)
+{
+	g_free(obj->path);
+	g_free(obj);
+}
+
+static int try_open_from_cache(char* cache_root, char* relative_path, int flags)
+{
+	gchar* path = g_build_filename(cache_root, relative_path, NULL);
+	int ret = open(path, flags, 0);
+	g_free(path);
+
+	return ret;
+}
+
+static int copy_file_and_return_destfd(char* src, char* dest)
+{
+}
+
+static gpointer file_cache_copy_thread(gpointer data)
+{
+	struct vcachefs_mount* mount_obj = data;
+
+	while(g_atomic_int_get(&mount_obj->quitflag_atomic) == 0) {
+		int err, destfd;
+		struct stat st;
+		struct file_queue_entry* item = g_async_queue_pop(mount_obj->file_copy_queue);
+		struct vcachefs_fdentry* fde;
+
+		/* Create the parent directory if we have to */
+		char* dirname = g_path_get_dirname(item->path);
+		char* parent_path = g_build_filename(mount_obj->cache_path, dirname, NULL);
+		char* dest_file = g_build_filename(mount_obj->cache_path, item->path, NULL);
+		err = lstat(parent_path, &st);
+		if (err == -ENOENT) {
+			if (g_mkdir_with_parents(parent_path, 5+7*8+7*8*8) != 0)
+				goto done;
+		} 
+		if(err < 0) 	/* Couldn't create dir */
+			goto done;
+		
+		destfd = copy_file_and_return_destfd(mount_obj->source_path, dest_file);
+		fde = fdentry_from_fd(item->fd);
+		if (fde) {
+			fde->filecache_fd = destfd;
+			fdentry_unref(fde);
+		}
+
+done:
+		g_free(dest_file);
+		g_free(dirname);
+		g_free(parent_path);
+		file_queue_entry_free(item);
+	}
+
+	g_atomic_int_set(&mount_obj->quitflag_atomic, 2);
+}
+
+
+/*
  * FUSE callouts
  */
 
@@ -90,12 +166,18 @@ static void* vcachefs_init(struct fuse_conn_info *conn)
 {
 	struct vcachefs_mount* mount_object = g_new0(struct vcachefs_mount, 1);
 	mount_object->source_path = "/etc"; 		/* XXX: Obviously dumb */
+	mount_object->cache_path = "/home/paul/.vcachefs"; 		/* XXX: Ditto */
 
 	/* Create the file descriptor table */
 	mount_object->fd_table = g_hash_table_new(g_int_hash, g_int_equal);
 	g_static_rw_lock_init(&mount_object->fd_table_rwlock);
 	mount_object->file_copy_queue = g_async_queue_new();
 	mount_object->next_fd = 4;
+
+
+	/* Set up the file cache thread */
+	g_thread_init(NULL);
+	mount_object->file_copy_queue = g_async_queue_new();
 
 	return mount_object;
 }
@@ -109,7 +191,13 @@ static void vcachefs_destroy(void *mount_object_ptr)
 {
 	struct vcachefs_mount* mount_object = mount_object_ptr;
 
-	g_async_queue_unref(mount_object->file_copy_queue;
+	// Free the async queue
+	char* item;
+	g_async_queue_lock(mount_object->file_copy_queue);
+	while ( (item = g_async_queue_try_pop_unlocked(mount_object->file_copy_queue)) ) {
+		g_free(item);
+	}
+	g_async_queue_unref(mount_object->file_copy_queue);
 
 	/* XXX: We need to make sure no one is using this before we trash it */
 	g_hash_table_foreach(mount_object->fd_table, trash_fdtable_item, NULL);
@@ -129,7 +217,7 @@ static int vcachefs_getattr(const char *path, struct stat *stbuf)
 	if(strcmp(path, "/") == 0)
 		return stat(mount_obj->source_path, stbuf);
 
-	gchar* full_path = g_strdup_printf("%s/%s", mount_obj->source_path, &path[1]);
+	gchar* full_path = g_build_filename(mount_obj->source_path, &path[1], NULL);
 	ret = stat((char *)full_path, stbuf);
 	g_free(full_path);
 
@@ -144,9 +232,9 @@ static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 	if(path == NULL || strlen(path) == 0)
 		return -ENOENT;
 
-	gchar* full_path = g_strdup_printf("%s/%s", mount_obj->source_path, &path[1]);
+	gchar* full_path = g_build_filename(mount_obj->source_path, &path[1], NULL);
 
-	int source_fd = open(full_path, fi->flags);
+	int source_fd = open(full_path, fi->flags, 0);
 	if(source_fd <= 0) 
 		return source_fd;
 
@@ -154,14 +242,38 @@ static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 	fde = fdentry_new();
 	g_static_rw_lock_writer_lock(&mount_obj->fd_table_rwlock);
 	fde->source_fd = source_fd;
+	fde->source_offset = 0;
 	fi->fh = fde->fd = mount_obj->next_fd;
 	mount_obj->next_fd++;
 	g_hash_table_insert(mount_obj->fd_table, &fde->fd, fde);
 	g_static_rw_lock_writer_unlock(&mount_obj->fd_table_rwlock);
 
+	/* Try to open the file cached version; if it's not there, add it to the fetch list */
+	if((fde->filecache_fd = try_open_from_cache(mount_obj->cache_path, path, fi->flags)) == -ENOENT) {
+		g_async_queue_push(mount_obj->file_copy_queue, g_strdup(path));
+	}
+
 	return 0;
 }
 
+static int read_from_fd(int fd, off_t* cur_offset, char* buf, size_t size, off_t offset)
+{
+	int ret = 0;
+
+	if(*cur_offset != offset) {
+		int tmp = lseek(fd, offset, SEEK_SET);
+		if (tmp < 0) {
+			ret = tmp;
+			goto out;
+		}
+	}
+
+	ret = read(fd, buf, size);
+	if (ret >= 0)
+		*cur_offset = offset + ret;
+out:
+	return ret;
+}
 
 static int vcachefs_read(const char *path, char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi)
@@ -171,21 +283,15 @@ static int vcachefs_read(const char *path, char *buf, size_t size, off_t offset,
 	if(!fde)
 		return -ENOENT;
 
-	if(fde->source_offset != offset) {
-		int tmp = lseek(fde->source_fd, offset, SEEK_SET);
-		if (tmp < 0) {
-			ret = tmp;
-			goto out;
-		}
-	}
+	/* Let's see if we can do this read from the file cache */
+	if( (ret = read_from_fd(fde->filecache_fd, &fde->filecache_offset, buf, size, offset)) >= 0)
+		goto out;
 
-	ret = read(fde->source_fd, buf, size);
-	if (ret >= 0)
-		fde->source_offset = offset + ret;
+	ret = read_from_fd(fde->source_fd, &fde->source_offset, buf, size, offset);
 
 out:
 	fdentry_unref(fde);
-	return size;
+	return ret;
 }
 
 
@@ -228,7 +334,7 @@ static int vcachefs_access(const char *path, int amode)
 	if(strcmp(path, "/") == 0)
 		return access(mount_obj->source_path, amode);
 
-	gchar* full_path = g_strdup_printf("%s/%s", mount_obj->source_path, &path[1]);
+	gchar* full_path = g_build_filename(mount_obj->source_path, &path[1], NULL);
 	ret = access((char *)full_path, amode);
 	g_free(full_path);
 
@@ -252,7 +358,7 @@ static int vcachefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	if(strcmp(path, "/") == 0) {
 		full_path = g_strdup(mount_obj->source_path);
 	} else {
-		full_path = g_strdup_printf("%s/%s", mount_obj->source_path, &path[1]);
+		full_path = g_build_filename(mount_obj->source_path, &path[1], NULL);
 	}
 	
 	/* Open the directory and read through it */
