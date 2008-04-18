@@ -87,7 +87,7 @@ static struct vcachefs_fdentry* fdentry_from_fd(uint fd)
  * File-based cache functions
  */
 
-static int try_open_from_cache(char* cache_root, char* relative_path, int flags)
+static int try_open_from_cache(const char* cache_root, const char* relative_path, int flags)
 {
 	gchar* path = g_build_filename(cache_root, relative_path, NULL);
 	int ret = open(path, flags, 0);
@@ -96,10 +96,10 @@ static int try_open_from_cache(char* cache_root, char* relative_path, int flags)
 	return ret;
 }
 
-static int copy_file_and_return_destfd(char* source_root, char* dest_root, char* relative_path, gint* quitflag_atomic)
+static int copy_file_and_return_destfd(const char* source_root, const char* dest_root, const char* relative_path, gint* quitflag_atomic)
 {
-	gchar* src_path = g_build_filename(source_root, relative_path);
-	gchar* dest_path = g_build_filename(dest_root, relative_path);
+	gchar* src_path = g_build_filename(source_root, relative_path, NULL);
+	gchar* dest_path = g_build_filename(dest_root, relative_path, NULL);
 	int src_fd = 0, dest_fd = 0;
 
 	src_fd = open(src_path, O_RDONLY);
@@ -109,9 +109,15 @@ static int copy_file_and_return_destfd(char* source_root, char* dest_root, char*
 
 	/* We've got files, let's go to town */
 	char buf[4096];
-	int has_read, int has_written;
+	int has_read, has_written;
 	do {
 		has_read = read(src_fd, buf, 4096);
+
+		if (g_atomic_int_get(quitflag_atomic)) {
+			has_read = -1;
+			has_written = -1;
+			break;
+		}
 
 		has_written = 0;
 		if (has_read > 0)
@@ -141,7 +147,7 @@ out:
 struct cache_entry {
 	int fd;
 	char* relative_path;
-}
+};
 
 static void add_cache_fd_to_item(gpointer key, gpointer value, gpointer cache_entry)
 {
@@ -174,7 +180,6 @@ static gpointer file_cache_copy_thread(gpointer data)
 		int err, destfd;
 		struct stat st;
 		char* relative_path = g_async_queue_pop(mount_obj->file_copy_queue);
-		struct vcachefs_fdentry* fde;
 		struct cache_entry ce;
 
 		/* Create the parent directory if we have to */
@@ -189,11 +194,13 @@ static gpointer file_cache_copy_thread(gpointer data)
 		if(err < 0) 	/* Couldn't create dir */
 			goto done;
 		
-		destfd = copy_file_and_return_destfd(mount_obj->source_path, dest_file);
+		destfd = copy_file_and_return_destfd(mount_obj->source_path, mount_obj->cache_path, 
+				relative_path, &mount_obj->quitflag_atomic);
+
 		if (destfd < 0)
 			goto done;
 
-		ce->fd = destfd; 	ce->relative_path = relative_path;
+		ce.fd = destfd; 	ce.relative_path = relative_path;
 
 		/* Grab the file table lock, and set the source file handle for every file */
 		g_static_rw_lock_writer_lock(&mount_obj->fd_table_rwlock);
