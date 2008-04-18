@@ -294,18 +294,18 @@ static int vcachefs_getattr(const char *path, struct stat *stbuf)
 	struct vcachefs_mount* mount_obj = get_current_mountinfo();
 
 	if(path == NULL || strlen(path) == 0) {
-		errno = ENOENT;
-		return -1;
+		return -ENOENT;
 	}
 
-	if(strcmp(path, "/") == 0)
-		return stat(mount_obj->source_path, stbuf);
+	if(strcmp(path, "/") == 0) {
+		return (stat(mount_obj->source_path, stbuf) ? -errno : 0);
+	}
 
 	gchar* full_path = g_build_filename(mount_obj->source_path, &path[1], NULL);
 	ret = stat((char *)full_path, stbuf);
 	g_free(full_path);
 
-	return ret;
+	return (ret ? -errno : 0);
 }
 
 static int vcachefs_open(const char *path, struct fuse_file_info *fi)
@@ -314,15 +314,14 @@ static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 	struct vcachefs_fdentry* fde = NULL;
 
 	if(path == NULL || strlen(path) == 0) {
-		errno = ENOENT;
-		return -1;
+		return -ENOENT;
 	}
 
 	gchar* full_path = g_build_filename(mount_obj->source_path, &path[1], NULL);
 
 	int source_fd = open(full_path, fi->flags, 0);
 	if(source_fd <= 0) 
-		return source_fd;
+		return -errno;
 
 	/* Open succeeded - time to create a fdentry */
 	fde = fdentry_new();
@@ -340,6 +339,7 @@ static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 		g_async_queue_push(mount_obj->file_copy_queue, g_strdup(path));
 	}
 
+	/* FUSE handles this differently */
 	return 0;
 }
 
@@ -378,7 +378,7 @@ static int vcachefs_read(const char *path, char *buf, size_t size, off_t offset,
 
 out:
 	fdentry_unref(fde);
-	return ret;
+	return (ret < 0 ? -errno : ret);
 }
 
 
@@ -425,7 +425,7 @@ static int vcachefs_access(const char *path, int amode)
 	ret = access((char *)full_path, amode);
 	g_free(full_path);
 
-	return ret;
+	return (ret < 0 ? errno : ret);
 
 }
 
@@ -433,24 +433,40 @@ static int vcachefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		off_t offset, struct fuse_file_info *fi)
 {
 	int ret;
-	gchar* full_path;
+	gchar* full_path = NULL;
+ 	const gchar* next_path_try;
 	struct vcachefs_mount* mount_obj = get_current_mountinfo();
-	DIR* dir;
+	DIR* dir = NULL;
 	struct dirent* dentry;
 	char path_buf[NAME_MAX];
 
 	if(path == NULL || strlen(path) == 0)
 		return -ENOENT;
 
-	if(strcmp(path, "/") == 0) {
-		full_path = g_strdup(mount_obj->source_path);
-	} else {
-		full_path = g_build_filename(mount_obj->source_path, &path[1], NULL);
+	/* Try the source path first; if it's gone, retry with the cache */
+	next_path_try = mount_obj->source_path;
+	while (next_path_try) {
+		if(strcmp(path, "/") == 0) {
+			full_path = g_strdup(next_path_try);
+		} else {
+			full_path = g_build_filename(next_path_try, &path[1], NULL);
+		}
+		
+		/* Open the directory and read through it */
+		if ((dir = opendir(full_path)) != NULL) 
+			break;
+
+		next_path_try = (next_path_try == mount_obj->source_path ?
+				 mount_obj->cache_path : NULL);
+		g_free(full_path);
 	}
-	
-	/* Open the directory and read through it */
-	if ((dir = opendir(full_path)) == NULL)
-		return -ENOENT;
+
+	/* No dice - bail */
+	if (dir == NULL) {
+		opendir(full_path);
+		g_free(full_path);
+		return -errno;
+	}
 
 	while((dentry = readdir(dir))) {
 		struct stat stbuf;
