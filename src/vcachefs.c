@@ -179,8 +179,15 @@ static gpointer file_cache_copy_thread(gpointer data)
 	while(g_atomic_int_get(&mount_obj->quitflag_atomic) == 0) {
 		int err, destfd;
 		struct stat st;
-		char* relative_path = g_async_queue_pop(mount_obj->file_copy_queue);
 		struct cache_entry ce;
+		GTimeVal five_secs_from_now;
+		char* relative_path;
+
+		g_get_current_time(&five_secs_from_now);
+		g_time_val_add(&five_secs_from_now, 5 * 1000 * 1000);
+		relative_path = g_async_queue_pop(mount_obj->file_copy_queue);
+		if (!relative_path)
+			continue;
 
 		/* Create the parent directory if we have to */
 		char* dirname = g_path_get_dirname(relative_path);
@@ -263,7 +270,8 @@ static void vcachefs_destroy(void *mount_object_ptr)
 	char* item;
 	g_async_queue_lock(mount_object->file_copy_queue);
 	while ( (item = g_async_queue_try_pop_unlocked(mount_object->file_copy_queue)) ) {
-		g_free(item);
+		if (item)
+			g_free(item);
 	}
 	g_async_queue_unref(mount_object->file_copy_queue);
 
