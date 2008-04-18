@@ -185,7 +185,7 @@ static gpointer file_cache_copy_thread(gpointer data)
 
 		g_get_current_time(&five_secs_from_now);
 		g_time_val_add(&five_secs_from_now, 5 * 1000 * 1000);
-		relative_path = g_async_queue_pop(mount_obj->file_copy_queue);
+		relative_path = g_async_queue_timed_pop(mount_obj->file_copy_queue, &five_secs_from_now);
 		if (!relative_path)
 			continue;
 
@@ -273,6 +273,7 @@ static void vcachefs_destroy(void *mount_object_ptr)
 		if (item)
 			g_free(item);
 	}
+	g_async_queue_unlock(mount_object->file_copy_queue);
 	g_async_queue_unref(mount_object->file_copy_queue);
 
 	/* XXX: We need to make sure no one is using this before we trash it */
