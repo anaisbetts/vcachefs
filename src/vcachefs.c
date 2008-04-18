@@ -468,6 +468,13 @@ static int vcachefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		return -errno;
 	}
 
+	/* mkdir -p the cache directory */
+	if(strcmp(path, "/") != 0) {
+		char* cache_path = g_build_filename(mount_obj->cache_path, &path[1], NULL);
+		g_mkdir_with_parents(cache_path, 5+7*8+7*8*8);
+		g_free(cache_path);
+	}
+
 	while((dentry = readdir(dir))) {
 		struct stat stbuf;
 		int stat_ret;
