@@ -96,6 +96,76 @@ static int try_open_from_cache(char* cache_root, char* relative_path, int flags)
 	return ret;
 }
 
+static int copy_file_and_return_destfd(char* source_root, char* dest_root, char* relative_path, gint* quitflag_atomic)
+{
+	gchar* src_path = g_build_filename(source_root, relative_path);
+	gchar* dest_path = g_build_filename(dest_root, relative_path);
+	int src_fd = 0, dest_fd = 0;
+
+	src_fd = open(src_path, O_RDONLY);
+	dest_fd = open(dest_path, O_RDWR | O_CREAT | O_EXCL);
+	if (src_fd <= 0 || dest_fd <= 0)
+		goto out;
+
+	/* We've got files, let's go to town */
+	char buf[4096];
+	int has_read, int has_written;
+	do {
+		has_read = read(src_fd, buf, 4096);
+
+		has_written = 0;
+		if (has_read > 0)
+			has_written = write(dest_fd, buf, has_read);
+	} while (has_read > 0 && has_written == has_read );
+
+	/* Something has gone wrong */
+	if (has_written != has_read || has_read < 0) {
+		unlink(dest_path);
+		close(dest_fd);
+		dest_fd = -1;
+		goto out;
+	}
+
+	lseek(dest_fd, 0, SEEK_SET);
+
+out:
+	if (src_fd > 0)
+		close(src_fd);
+	g_free(src_path);
+	g_free(dest_path);
+
+	return dest_fd;
+}
+
+/* Stupid struct to pass a tuple through to this fn */
+struct cache_entry {
+	int fd;
+	char* relative_path;
+}
+
+static void add_cache_fd_to_item(gpointer key, gpointer value, gpointer cache_entry)
+{
+	/* NOTE: Since we've grabbed the fd table lock before this function, we don't need
+	 * to grab a reference to the fd entry */
+	struct vcachefs_fdentry* fde = value;
+	struct cache_entry* ce = cache_entry;
+	if (strcmp(fde->relative_path, ce->relative_path))
+		return;
+
+	int fd = dup(ce->fd);
+	lseek(fd, 0, SEEK_SET);
+
+	/* Maybe some thread beat us to it? */
+	if (fde->source_fd > 0) {
+		int tmp = fde->source_fd;
+		fde->source_fd = 0;
+		close(tmp);
+	}
+
+	fde->source_offset = fd;
+	fde->source_fd = fd;
+}
+
 static gpointer file_cache_copy_thread(gpointer data)
 {
 	struct vcachefs_mount* mount_obj = data;
@@ -103,13 +173,14 @@ static gpointer file_cache_copy_thread(gpointer data)
 	while(g_atomic_int_get(&mount_obj->quitflag_atomic) == 0) {
 		int err, destfd;
 		struct stat st;
-		struct file_queue_entry* item = g_async_queue_pop(mount_obj->file_copy_queue);
+		char* relative_path = g_async_queue_pop(mount_obj->file_copy_queue);
 		struct vcachefs_fdentry* fde;
+		struct cache_entry ce;
 
 		/* Create the parent directory if we have to */
-		char* dirname = g_path_get_dirname(item->path);
+		char* dirname = g_path_get_dirname(relative_path);
 		char* parent_path = g_build_filename(mount_obj->cache_path, dirname, NULL);
-		char* dest_file = g_build_filename(mount_obj->cache_path, item->path, NULL);
+		char* dest_file = g_build_filename(mount_obj->cache_path, relative_path, NULL);
 		err = lstat(parent_path, &st);
 		if (err == -ENOENT) {
 			if (g_mkdir_with_parents(parent_path, 5+7*8+7*8*8) != 0)
@@ -119,17 +190,24 @@ static gpointer file_cache_copy_thread(gpointer data)
 			goto done;
 		
 		destfd = copy_file_and_return_destfd(mount_obj->source_path, dest_file);
-		fde = fdentry_from_fd(item->fd);
-		if (fde) {
-			fde->filecache_fd = destfd;
-			fdentry_unref(fde);
-		}
+		if (destfd < 0)
+			goto done;
+
+		ce->fd = destfd; 	ce->relative_path = relative_path;
+
+		/* Grab the file table lock, and set the source file handle for every file */
+		g_static_rw_lock_writer_lock(&mount_obj->fd_table_rwlock);
+		g_hash_table_foreach(mount_obj->fd_table, add_cache_fd_to_item, &ce);
+		g_static_rw_lock_writer_unlock(&mount_obj->fd_table_rwlock);
+
+		/* Let go of our original fd */
+		close(destfd);
 
 done:
 		g_free(dest_file);
 		g_free(dirname);
 		g_free(parent_path);
-		file_queue_entry_free(item);
+		g_free(relative_path);
 	}
 
 	return NULL;
@@ -155,6 +233,7 @@ static void* vcachefs_init(struct fuse_conn_info *conn)
 
 	/* Set up the file cache thread */
 	mount_object->file_copy_queue = g_async_queue_new();
+	mount_object->file_copy_thread = g_thread_create(file_cache_copy_thread, mount_object, TRUE/*joinable*/, NULL);
 
 	return mount_object;
 }
@@ -168,7 +247,12 @@ static void vcachefs_destroy(void *mount_object_ptr)
 {
 	struct vcachefs_mount* mount_object = mount_object_ptr;
 
-	// Free the async queue
+	/* Signal the file cache thread to terminate and wait for it
+	 * XXX: if the thread hangs, we're boned - no way to timeout this */
+	g_atomic_int_set(&mount_object->quitflag_atomic, 1);
+	g_thread_join(mount_object->file_copy_thread);
+
+	/* Free the async queue */
 	char* item;
 	g_async_queue_lock(mount_object->file_copy_queue);
 	while ( (item = g_async_queue_try_pop_unlocked(mount_object->file_copy_queue)) ) {
