@@ -41,9 +41,6 @@ To run
 Known Issues
 --------------
 
-* Right now, the source/cache paths are hardcoded - obviously, this is pretty
-  useless, but you can at least hack it
-
 * vcachefs doesn't do very smart things wrt permissions in the cache folder -
   we'll probably have to fix this in the future (but for music/video caching, it
   doesn't matter much

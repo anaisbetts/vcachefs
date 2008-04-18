@@ -23,6 +23,7 @@
 
 #include <fuse.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -240,8 +241,13 @@ done:
 static void* vcachefs_init(struct fuse_conn_info *conn)
 {
 	struct vcachefs_mount* mount_object = g_new0(struct vcachefs_mount, 1);
-	mount_object->source_path = "/etc"; 		/* XXX: Obviously dumb */
-	mount_object->cache_path = "/home/paul/.vcachefs"; 		/* XXX: Ditto */
+	mount_object->source_path = g_strdup(getenv("VCACHEFS_TARGET"));
+	char* cache = getenv("VCACHEFS_CACHEPATH");
+	if (cache) {
+		mount_object->cache_path = g_strdup(cache);
+	} else {
+		mount_object->cache_path = g_build_filename(getenv("HOME"), ".vcachefs", NULL);
+	}
 
 	g_thread_init(NULL);
 
@@ -285,6 +291,8 @@ static void vcachefs_destroy(void *mount_object_ptr)
 	g_hash_table_foreach(mount_object->fd_table, trash_fdtable_item, NULL);
 	g_hash_table_destroy(mount_object->fd_table);
 	mount_object->fd_table = NULL;
+	g_free(mount_object->cache_path);
+	g_free(mount_object->source_path);
 	g_free(mount_object);
 }
 
@@ -520,5 +528,13 @@ static struct fuse_operations vcachefs_oper = {
 
 int main(int argc, char *argv[])
 {
+	/* Check for our environment variables 
+	 * FIXME: There's got to be a less dumb way to do this */
+	if (!getenv("VCACHEFS_TARGET")) {
+		printf(" *** Please set the VCACHEFS_TARGET environment variable to the path that"
+		       "should be mirrored! ***\n");
+		return -1;
+	}
+	
 	return fuse_main(argc, argv, &vcachefs_oper, NULL);
 }

@@ -5,13 +5,13 @@ Done:
 		* Async worker thread saving off files
 		* Save off info in fd table
 		* Switching from net read to file read mid-file
+	* Bookkeeping (grok settings, set up cache directory, etc)
 
 Dropped:
 	* Tag Block cache (media apps cache off this info anyways)
 
 
 Milestones to 1.0
-	* Bookkeeping (grok settings, set up cache directory, etc)
 	* File-based cache
 		* MRU algorithm when we get cache size pressure
 	* Extra nonsense

@@ -29,7 +29,7 @@
 /* This object is the per-mount data we carry around with us throughout the 
  * life of the app until we release it */
 struct vcachefs_mount {
-	const char* 	source_path;
+	char* 	source_path;
 	
 	/* File descriptor table */
 	GHashTable* 	fd_table;
@@ -40,7 +40,7 @@ struct vcachefs_mount {
 	GAsyncQueue* 	file_copy_queue;
 	GThread* 	file_copy_thread;
 	gint 		quitflag_atomic;
-	const char* 	cache_path;
+	char* 	cache_path;
 };
 
 struct vcachefs_fdentry {
