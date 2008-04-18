@@ -102,6 +102,7 @@ static int copy_file_and_return_destfd(const char* source_root, const char* dest
 	gchar* dest_path = g_build_filename(dest_root, relative_path, NULL);
 	int src_fd = 0, dest_fd = 0;
 
+	g_debug("Copying '%s' to '%s'", src_path, dest_path);
 	src_fd = open(src_path, O_RDONLY);
 	dest_fd = open(dest_path, O_RDWR | O_CREAT | O_EXCL);
 	if (src_fd <= 0 || dest_fd <= 0)
@@ -132,9 +133,11 @@ static int copy_file_and_return_destfd(const char* source_root, const char* dest
 		goto out;
 	}
 
+	g_debug("Copy succeeded");
 	lseek(dest_fd, 0, SEEK_SET);
 
 out:
+	g_debug("Exiting, dest_fd = %d", dest_fd);
 	if (src_fd > 0)
 		close(src_fd);
 	g_free(src_path);
@@ -176,6 +179,7 @@ static gpointer file_cache_copy_thread(gpointer data)
 {
 	struct vcachefs_mount* mount_obj = data;
 
+	g_debug("Starting cache copy thread...");
 	while(g_atomic_int_get(&mount_obj->quitflag_atomic) == 0) {
 		int err, destfd;
 		struct stat st;
@@ -192,9 +196,10 @@ static gpointer file_cache_copy_thread(gpointer data)
 		/* Create the parent directory if we have to */
 		char* dirname = g_path_get_dirname(relative_path);
 		char* parent_path = g_build_filename(mount_obj->cache_path, dirname, NULL);
-		char* dest_file = g_build_filename(mount_obj->cache_path, relative_path, NULL);
+		g_debug("Starting copy, picked up '%s'", relative_path);
 		err = lstat(parent_path, &st);
-		if (err == -ENOENT) {
+		if (err == -1 && errno == ENOENT) {
+			g_debug("Creating '%s'", parent_path);
 			if (g_mkdir_with_parents(parent_path, 5+7*8+7*8*8) != 0)
 				goto done;
 		} 
@@ -218,11 +223,11 @@ static gpointer file_cache_copy_thread(gpointer data)
 		close(destfd);
 
 done:
-		g_free(dest_file);
 		g_free(dirname);
 		g_free(parent_path);
 		g_free(relative_path);
 	}
+	g_debug("Ending cache copy thread...");
 
 	return NULL;
 }
@@ -288,8 +293,10 @@ static int vcachefs_getattr(const char *path, struct stat *stbuf)
 	int ret = 0; 
 	struct vcachefs_mount* mount_obj = get_current_mountinfo();
 
-	if(path == NULL || strlen(path) == 0)
-		return -ENOENT;
+	if(path == NULL || strlen(path) == 0) {
+		errno = ENOENT;
+		return -1;
+	}
 
 	if(strcmp(path, "/") == 0)
 		return stat(mount_obj->source_path, stbuf);
@@ -306,8 +313,10 @@ static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 	struct vcachefs_mount* mount_obj = get_current_mountinfo();
 	struct vcachefs_fdentry* fde = NULL;
 
-	if(path == NULL || strlen(path) == 0)
-		return -ENOENT;
+	if(path == NULL || strlen(path) == 0) {
+		errno = ENOENT;
+		return -1;
+	}
 
 	gchar* full_path = g_build_filename(mount_obj->source_path, &path[1], NULL);
 
@@ -327,7 +336,7 @@ static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 	g_static_rw_lock_writer_unlock(&mount_obj->fd_table_rwlock);
 
 	/* Try to open the file cached version; if it's not there, add it to the fetch list */
-	if((fde->filecache_fd = try_open_from_cache(mount_obj->cache_path, path, fi->flags)) == -ENOENT) {
+	if((fde->filecache_fd = try_open_from_cache(mount_obj->cache_path, path, fi->flags)) == -1 && errno == ENOENT) {
 		g_async_queue_push(mount_obj->file_copy_queue, g_strdup(path));
 	}
 
