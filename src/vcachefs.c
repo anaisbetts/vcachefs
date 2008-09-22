@@ -32,12 +32,20 @@
 #include <sys/statvfs.h>
 #include <dirent.h>
 #include <unistd.h>
+
 #include <glib.h>
+#include <event.h>
 
 #include "vcachefs.h"
 
+/* Globals */
+struct event_base* ev_base = NULL;
+GIOChannel* stats_file = NULL;
 
-/* Utility Routines */
+
+/* 
+ * Utility Routines 
+ */
 
 static struct vcachefs_mount* get_current_mountinfo(void)
 {
@@ -108,6 +116,8 @@ static int copy_file_and_return_destfd(const char* source_root, const char* dest
 	dest_fd = open(dest_path, O_RDWR | O_CREAT | O_EXCL);
 	if (src_fd <= 0 || dest_fd <= 0)
 		goto out;
+
+	stats_write_record(stats_file, "copyfile", 0, 0, relative_path);
 
 	/* We've got files, let's go to town */
 	char buf[4096];
@@ -260,6 +270,9 @@ static void* vcachefs_init(struct fuse_conn_info *conn)
 	mount_object->file_copy_queue = g_async_queue_new();
 	mount_object->file_copy_thread = g_thread_create(file_cache_copy_thread, mount_object, TRUE/*joinable*/, NULL);
 
+	stats_write_record(stats_file, "init_source", 0, 0, mount_object->source_path);
+	stats_write_record(stats_file, "init_target", 0, 0, mount_object->cache_path);
+
 	return mount_object;
 }
 
@@ -305,6 +318,7 @@ static int vcachefs_getattr(const char *path, struct stat *stbuf)
 		return -ENOENT;
 	}
 
+	stats_write_record(stats_file, "getattr", 0, 0, path);
 	if(strcmp(path, "/") == 0) {
 		return (stat(mount_obj->source_path, stbuf) ? -errno : 0);
 	}
@@ -348,6 +362,7 @@ static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 	}
 
 	/* FUSE handles this differently */
+	stats_write_record(stats_file, "open", 0, 0, path);
 	return 0;
 }
 
@@ -379,9 +394,12 @@ static int vcachefs_read(const char *path, char *buf, size_t size, off_t offset,
 		return -ENOENT;
 
 	/* Let's see if we can do this read from the file cache */
-	if( (ret = read_from_fd(fde->filecache_fd, &fde->filecache_offset, buf, size, offset)) >= 0)
+	if( (ret = read_from_fd(fde->filecache_fd, &fde->filecache_offset, buf, size, offset)) >= 0) {
+		stats_write_record(stats_file, "cached_read", size, offset, path);
 		goto out;
+	}
 
+	stats_write_record(stats_file, "uncached_read", size, offset, path);
 	ret = read_from_fd(fde->source_fd, &fde->source_offset, buf, size, offset);
 
 out:
@@ -426,9 +444,12 @@ static int vcachefs_access(const char *path, int amode)
 	if(path == NULL || strlen(path) == 0)
 		return -ENOENT;
 
-	if(strcmp(path, "/") == 0)
+	if(strcmp(path, "/") == 0) {
+		stats_write_record(stats_file, "cached_access", amode, 0, path);
 		return access(mount_obj->source_path, amode);
+	}
 
+	stats_write_record(stats_file, "uncached_access", amode, 0, path);
 	gchar* full_path = g_build_filename(mount_obj->source_path, &path[1], NULL);
 	ret = access((char *)full_path, amode);
 	g_free(full_path);
@@ -475,6 +496,8 @@ static int vcachefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		g_free(full_path);
 		return -errno;
 	}
+
+	stats_write_record(stats_file, "readdir", offset, 0, path);
 
 	/* mkdir -p the cache directory */
 	if(strcmp(path, "/") != 0) {
@@ -531,10 +554,13 @@ int main(int argc, char *argv[])
 	/* Check for our environment variables 
 	 * FIXME: There's got to be a less dumb way to do this */
 	if (!getenv("VCACHEFS_TARGET")) {
-		printf(" *** Please set the VCACHEFS_TARGET environment variable to the path that"
+		printf(" *** Please set the VCACHEFS_TARGET environment variable to the path that "
 		       "should be mirrored! ***\n");
 		return -1;
 	}
+
+	/* Initialize libevent */
+	ev_base = event_init();
 	
 	return fuse_main(argc, argv, &vcachefs_oper, NULL);
 }
