@@ -49,7 +49,7 @@ GIOChannel* stats_open_logging(void)
 
 	if (ret) {
 		gsize dontcare;
-		g_io_channel_write_chars(ret, "Timecode, Operation, Offset, Size, Info", -1, &dontcare, NULL);
+		g_io_channel_write_chars(ret, "Timecode, Operation, Offset, Size, Info\n", -1, &dontcare, NULL);
 	}
 
 	g_free(path);
@@ -73,9 +73,9 @@ int stats_write_record(GIOChannel* channel, const char* operation, off_t offset,
 
 	gchar* buf;
 	if (sizeof(off_t) == 8) {
-	 	buf = g_strdup_printf("%llu, \"%s\", %llu, %u, \"%s\"", get_time_code(), operation, offset, size, safe_info);
+	 	buf = g_strdup_printf("%llu, \"%s\", %llu, %u, \"%s\"\n", get_time_code(), operation, offset, size, safe_info);
 	} else {
-	 	buf = g_strdup_printf("%llu, \"%s\", %u, %u, \"%s\"", get_time_code(), operation, offset, size, safe_info);
+	 	buf = g_strdup_printf("%llu, \"%s\", %u, %u, \"%s\"\n", get_time_code(), operation, offset, size, safe_info);
 	}
 
 	gsize dontcare;

@@ -37,6 +37,7 @@
 #include <event.h>
 
 #include "vcachefs.h"
+#include "stats.h"
 
 /* Globals */
 struct event_base* ev_base = NULL;
@@ -272,7 +273,6 @@ static void* vcachefs_init(struct fuse_conn_info *conn)
 	mount_object->file_copy_queue = g_async_queue_new();
 	mount_object->file_copy_thread = g_thread_create(file_cache_copy_thread, mount_object, TRUE/*joinable*/, NULL);
 
-	stats_write_record(stats_file, "init_source", 0, 0, mount_object->source_path);
 	stats_write_record(stats_file, "init_target", 0, 0, mount_object->cache_path);
 
 	return mount_object;
