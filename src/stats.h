@@ -30,7 +30,7 @@
 
 #define stats_open_logging() 	NULL
 #define stats_close_logging(x)
-#define stats_write_record(c, op, of, s, i) 	true
+#define stats_write_record(c, op, of, s, i) 	1
 
 #else
 

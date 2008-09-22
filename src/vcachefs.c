@@ -261,6 +261,8 @@ static void* vcachefs_init(struct fuse_conn_info *conn)
 
 	g_thread_init(NULL);
 
+	stats_file = stats_open_logging();
+
 	/* Create the file descriptor table */
 	mount_object->fd_table = g_hash_table_new(g_int_hash, g_int_equal);
 	g_static_rw_lock_init(&mount_object->fd_table_rwlock);
@@ -307,6 +309,8 @@ static void vcachefs_destroy(void *mount_object_ptr)
 	g_free(mount_object->cache_path);
 	g_free(mount_object->source_path);
 	g_free(mount_object);
+
+	stats_close_logging(stats_file);
 }
 
 static int vcachefs_getattr(const char *path, struct stat *stbuf)

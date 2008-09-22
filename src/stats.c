@@ -58,6 +58,9 @@ GIOChannel* stats_open_logging(void)
 
 void stats_close_logging(GIOChannel* channel)
 {
+	if (!channel)
+		return;
+
 	g_io_channel_shutdown(channel, TRUE, NULL);
 }
 
