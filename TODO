@@ -8,12 +8,16 @@ Done:
 	* Bookkeeping (grok settings, set up cache directory, etc)
 
 Dropped:
-	* Tag Block cache (media apps cache off this info anyways)
-
 
 Milestones to 1.0
+	* First n*4k cache
+		* Save off the first 4k in a separate file, most media apps want
+		  to just get the tags (iTunes manages to wreck this when they
+		  scan the file for gapless playback though)
 	* File-based cache
 		* MRU algorithm when we get cache size pressure
+		* Add an extra level that is a hash based on the mount location,
+		  so that our cache isn't nonsense
 	* Extra nonsense
 		* All the dumb stuff OS X needs like resource forks
 
