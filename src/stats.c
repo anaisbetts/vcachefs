@@ -21,7 +21,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
  */
 
-#include <fuse.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,7 +34,6 @@
 #include <unistd.h>
 
 #include <glib.h>
-#include <event.h>
 
 #include "stats.h"
 #include "config.h"

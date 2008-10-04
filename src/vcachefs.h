@@ -26,6 +26,10 @@
 
 #include <glib.h>
 
+#ifndef uint
+#define uint 	unsigned int
+#endif
+
 /* This object is the per-mount data we carry around with us throughout the 
  * life of the app until we release it */
 struct vcachefs_mount {

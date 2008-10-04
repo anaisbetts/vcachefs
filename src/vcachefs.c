@@ -21,26 +21,27 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
  */
 
-#include <fuse.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <sys/uio.h>
+#include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <dirent.h>
 #include <unistd.h>
 
+#include <fuse.h>
 #include <glib.h>
-#include <event.h>
 
 #include "vcachefs.h"
 #include "stats.h"
 
 /* Globals */
-struct event_base* ev_base = NULL;
+//struct event_base* ev_base = NULL;
 GIOChannel* stats_file = NULL;
 
 
@@ -114,7 +115,7 @@ static int copy_file_and_return_destfd(const char* source_root, const char* dest
 
 	g_debug("Copying '%s' to '%s'", src_path, dest_path);
 	src_fd = open(src_path, O_RDONLY);
-	dest_fd = open(dest_path, O_RDWR | O_CREAT | O_EXCL);
+	dest_fd = open(dest_path, O_RDWR | O_CREAT | O_EXCL, S_IRWXU | S_IRGRP | S_IROTH);
 	if (src_fd <= 0 || dest_fd <= 0)
 		goto out;
 
@@ -471,7 +472,7 @@ static int vcachefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	struct vcachefs_mount* mount_obj = get_current_mountinfo();
 	DIR* dir = NULL;
 	struct dirent* dentry;
-	char path_buf[NAME_MAX];
+	char path_buf[512];
 
 	if(path == NULL || strlen(path) == 0)
 		return -ENOENT;
@@ -515,7 +516,7 @@ static int vcachefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		int stat_ret;
 
 		/* Stat the file */
-		snprintf(path_buf, NAME_MAX, "%s/%s", full_path, dentry->d_name);
+		snprintf(path_buf, 512, "%s/%s", full_path, dentry->d_name);
 		stat_ret = stat(path_buf, &stbuf);
 
 		if ((ret = filler(buf, dentry->d_name, (stat_ret>=0 ? &stbuf : NULL), 0)))
@@ -564,7 +565,7 @@ int main(int argc, char *argv[])
 	}
 
 	/* Initialize libevent */
-	ev_base = event_init();
+	//ev_base = event_init();
 	
 	return fuse_main(argc, argv, &vcachefs_oper, NULL);
 }
