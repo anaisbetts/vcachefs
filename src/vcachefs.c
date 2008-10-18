@@ -93,6 +93,27 @@ static struct vcachefs_fdentry* fdentry_from_fd(uint fd)
 	return (ret ? fdentry_ref(ret) : NULL);
 }
 
+static char* build_cache_path(const char* source_path)
+{
+	const char* env = getenv("VCACHEFS_CACHEPATH");
+	char* cache_root;
+	if (env) {
+		cache_root = g_strdup(env);
+	} else {
+		cache_root = g_build_filename(getenv("HOME"), ".vcachefs", NULL);
+	}
+
+	// Calculate the MD5 of the source path
+	gchar* sum = NULL;
+	gchar* ret = NULL;
+	sum = g_compute_checksum_for_string(G_CHECKSUM_MD5, source_path, -1);
+	ret = g_build_filename(cache_root, sum, NULL);
+	g_free(sum);
+
+	g_free(cache_root);
+	return ret;
+}
+
 
 /*
  * File-based cache functions
@@ -254,12 +275,7 @@ static void* vcachefs_init(struct fuse_conn_info *conn)
 {
 	struct vcachefs_mount* mount_object = g_new0(struct vcachefs_mount, 1);
 	mount_object->source_path = g_strdup(getenv("VCACHEFS_TARGET"));
-	char* cache = getenv("VCACHEFS_CACHEPATH");
-	if (cache) {
-		mount_object->cache_path = g_strdup(cache);
-	} else {
-		mount_object->cache_path = g_build_filename(getenv("HOME"), ".vcachefs", NULL);
-	}
+	mount_object->cache_path = build_cache_path(mount_object->source_path);
 
 	g_thread_init(NULL);
 
