@@ -1,5 +1,5 @@
 /*
- * queue.h - Userspace video caching filesystem 
+ * cachemgr.h - Userspace video caching filesystem 
  *
  * Copyright 2008 Paul Betts <paul.betts@gmail.com>
  *
@@ -21,16 +21,19 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
  */
 
-#ifndef _QUEUE_H
-#define _QUEUE_H
+#ifndef _CACHEMGR_H
+#define _CACHEMGR_H
 
 #include "stdafx.h"
 #include "queue.h"
 
-struct WorkitemQueue;
+typedef gboolean (*CMCanDeleteCallback) (const char* path, gpointer context);
+struct CacheManager;
 
-struct WorkitemQueue* workitem_queue_new(void);
-void workitem_queue_free(struct WorkitemQueue* queue);
-gboolean workitem_queue_insert(struct WorkitemQueue* queue, GFunc func, gpointer data, gpointer context);
+struct CacheManager* cache_manager_new(const char* cache_root, CMCanDeleteCallback callback, gpointer context);
+void cache_manager_free(struct CacheManager* obj);
+guint64 cache_manager_get_size(struct CacheManager* this);
+void cache_manager_notify_added(struct CacheManager* this, const char* full_path);
+guint64 cache_manager_reclaim_space(struct CacheManager* this, guint64 max_size);
 
 #endif 

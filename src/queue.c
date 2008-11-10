@@ -55,7 +55,7 @@ static gpointer worker_thread_proc(gpointer data)
 	return 0;
 }
 
-struct WorkitemQueue* workitem_queue_init(void)
+struct WorkitemQueue* workitem_queue_new(void)
 {
 	struct WorkitemQueue* ret = g_new0(struct WorkitemQueue, 1);
 	if (!ret) 
@@ -87,6 +87,7 @@ void workitem_queue_free(struct WorkitemQueue* queue)
 
 	queue->should_quit = TRUE;
 
+	/* Clear out the action queue */
 	struct Workitem* to_free;
 	g_async_queue_lock(queue->to_process);
 	while( !(to_free = g_async_queue_try_pop_unlocked(queue->to_process)) ) {

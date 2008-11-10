@@ -37,12 +37,13 @@
 #include <fuse.h>
 #include <glib.h>
 
+#include "stdafx.h"
 #include "vcachefs.h"
 #include "stats.h"
 #include "queue.h"
+#include "cachemgr.h"
 
 /* Globals */
-//struct event_base* ev_base = NULL;
 GIOChannel* stats_file = NULL;
 
 
@@ -225,8 +226,12 @@ static gpointer file_cache_copy_thread(gpointer data)
 		g_get_current_time(&five_secs_from_now);
 		g_time_val_add(&five_secs_from_now, 5 * 1000 * 1000);
 		relative_path = g_async_queue_timed_pop(mount_obj->file_copy_queue, &five_secs_from_now);
-		if (!relative_path)
+
+		/* We didn't have anything to do - let's clean up the cache */
+		if (!relative_path) {
+			cache_manager_reclaim_space(mount_obj->cache_manager, mount_obj->max_cache_size);
 			continue;
+		}
 
 		/* Create the parent directory if we have to */
 		char* dirname = g_path_get_dirname(relative_path);
@@ -254,6 +259,11 @@ static gpointer file_cache_copy_thread(gpointer data)
 		g_hash_table_foreach(mount_obj->fd_table, add_cache_fd_to_item, &ce);
 		g_static_rw_lock_writer_unlock(&mount_obj->fd_table_rwlock);
 
+		/* Notify the cache manager */
+		char* dest_path = g_build_filename(mount_obj->cache_path, relative_path, NULL);
+		cache_manager_notify_added(mount_obj->cache_manager, dest_path);
+		g_free(dest_path);
+
 		/* Let go of our original fd */
 		close(destfd);
 
@@ -267,6 +277,10 @@ done:
 	return NULL;
 }
 
+gboolean can_delete_cached_file(const char* path, gpointer context)
+{
+	return TRUE;
+}
 
 /*
  * FUSE callouts
@@ -278,6 +292,9 @@ static void* vcachefs_init(struct fuse_conn_info *conn)
 	mount_object->source_path = g_strdup(getenv("VCACHEFS_TARGET"));
 	mount_object->cache_path = build_cache_path(mount_object->source_path);
 
+	/* TODO: This is actually a config param */
+	mount_object->max_cache_size = 10 * 1024 * 1024;
+
 	g_thread_init(NULL);
 
 	stats_file = stats_open_logging();
@@ -286,6 +303,9 @@ static void* vcachefs_init(struct fuse_conn_info *conn)
 	mount_object->fd_table = g_hash_table_new(g_int_hash, g_int_equal);
 	g_static_rw_lock_init(&mount_object->fd_table_rwlock);
 	mount_object->next_fd = 4;
+
+	mount_object->cache_manager = cache_manager_new(mount_object->cache_path, can_delete_cached_file, mount_object);
+	mount_object->work_queue = workitem_queue_new();
 
 	/* Set up the file cache thread */
 	mount_object->file_copy_queue = g_async_queue_new();
@@ -319,6 +339,9 @@ static void vcachefs_destroy(void *mount_object_ptr)
 	}
 	g_async_queue_unlock(mount_object->file_copy_queue);
 	g_async_queue_unref(mount_object->file_copy_queue);
+
+	workitem_queue_free(mount_object->work_queue);
+	cache_manager_free(mount_object->cache_manager);
 
 	/* XXX: We need to make sure no one is using this before we trash it */
 	g_hash_table_foreach(mount_object->fd_table, trash_fdtable_item, NULL);

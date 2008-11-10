@@ -33,7 +33,11 @@
 /* This object is the per-mount data we carry around with us throughout the 
  * life of the app until we release it */
 struct vcachefs_mount {
+
+	/* Configuration */
 	char* 	source_path;
+	char* 	cache_path;
+	gulong 	max_cache_size;
 	
 	/* File descriptor table */
 	GHashTable* 	fd_table;
@@ -41,10 +45,12 @@ struct vcachefs_mount {
 	GStaticRWLock 	fd_table_rwlock;
 
 	/* File-based caching */
-	GAsyncQueue* 	file_copy_queue;
-	GThread* 	file_copy_thread;
-	gint 		quitflag_atomic;
-	char* 	cache_path;
+	GAsyncQueue* 		file_copy_queue;
+	GThread* 		file_copy_thread;
+	gint 			quitflag_atomic;
+	struct CacheManager* 	cache_manager;
+
+	struct WorkitemQueue* work_queue;
 };
 
 struct vcachefs_fdentry {
