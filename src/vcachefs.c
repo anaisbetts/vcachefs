@@ -402,8 +402,15 @@ static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 	g_static_rw_lock_writer_unlock(&mount_obj->fd_table_rwlock);
 
 	/* Try to open the file cached version; if it's not there, add it to the fetch list */
-	if((fde->filecache_fd = try_open_from_cache(mount_obj->cache_path, path, fi->flags)) == -1 && errno == ENOENT) {
+	if( (fde->filecache_fd = try_open_from_cache(mount_obj->cache_path, path, fi->flags)) == -1 && errno == ENOENT) {
 		g_async_queue_push(mount_obj->file_copy_queue, g_strdup(path));
+	}
+
+	/* Touch the file so it doesn't get reclaimed by the cache manager */
+	if (fde->filecache_fd) {
+		gchar* full_cache_path = g_build_filename(mount_obj->cache_path, path, NULL);
+		cache_manager_touch_file(mount_obj->cache_manager, full_cache_path);
+		g_free(full_cache_path);
 	}
 
 	/* FUSE handles this differently */

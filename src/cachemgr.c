@@ -79,6 +79,27 @@ static void cacheitem_free_list(GSList* to_free)
 	g_slist_free(to_free);
 }
 
+static void cacheitem_touch(struct CacheItem* this)
+{
+	this->mtime = time(NULL);
+
+	/* Attempt to touch the file itself */
+	int fd;
+	if ( (fd = open(this->path, O_RDWR)) < 0)
+		return;
+
+	int bytes_read;
+	char buf[512];
+	if ( (bytes_read = read(fd, buf, 512 * sizeof(char))) < 0)
+		goto out;
+	lseek(fd, 0, SEEK_SET);
+	write(fd, buf, bytes_read);
+
+out:
+	if (fd >= 0)
+		close(fd);
+}
+
 static gint cache_item_sortfunc(gconstpointer lhs, gconstpointer rhs)
 {
 	time_t lhs_t = ((struct CacheItem*)lhs)->mtime;
@@ -232,4 +253,25 @@ guint64 cache_manager_reclaim_space(struct CacheManager* this, guint64 max_size)
 	cacheitem_free_list(remove_list);
 
 	return removed_size;
+}
+
+void cache_manager_touch_file(struct CacheManager* this, const char* full_path)
+{
+	g_static_rw_lock_writer_lock(&this->file_list_rwlock);
+
+	GSList* iter = this->file_list;
+	struct CacheItem* item = iter->data;
+	while (iter) {
+		item = iter->data;
+		if (!strcmp(item->path, full_path))
+			break;
+
+		iter = g_slist_next(iter);
+	}
+
+	if (iter != NULL) {
+		g_slist_remove_link(this->file_list, iter);
+	}
+
+	g_static_rw_lock_writer_unlock(&this->file_list_rwlock);
 }
