@@ -14,4 +14,5 @@ vcachefs_LDADD = $(VCACHEFS_LIBS) -lgthread-2.0 -lpthread -levent
 
 vcachefs_SOURCES = \
 	vcachefs.c \
-	stats.c
+	stats.c \
+	queue.c

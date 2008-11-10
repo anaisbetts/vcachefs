@@ -39,6 +39,7 @@
 
 #include "vcachefs.h"
 #include "stats.h"
+#include "queue.h"
 
 /* Globals */
 //struct event_base* ev_base = NULL;
