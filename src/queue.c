@@ -43,7 +43,13 @@ static gpointer worker_thread_proc(gpointer data)
 	g_async_queue_ref(this->to_process);
 
 	while(!this->should_quit) {
-		struct Workitem* item = g_async_queue_pop(this->to_process);
+		GTimeVal two_second_delay;
+		g_get_current_time(&two_second_delay);
+		g_time_val_add(&two_second_delay, 2 * 1000 * 1000);
+		struct Workitem* item = g_async_queue_timed_pop(this->to_process, &two_second_delay);
+
+		if (!item)
+			continue;
 
 		if (item->func)
 			(item->func)(item->data, item->context);
@@ -90,15 +96,10 @@ void workitem_queue_free(struct WorkitemQueue* queue)
 	/* Clear out the action queue */
 	struct Workitem* to_free;
 	g_async_queue_lock(queue->to_process);
-	while( !(to_free = g_async_queue_try_pop_unlocked(queue->to_process)) ) {
+	while( (to_free = g_async_queue_try_pop_unlocked(queue->to_process)) ) {
 		g_free(to_free);
 	}
 
-	/* Make sure we've got one extra dummy item so that the worker thread 
-	 * doesn't deadlock */
-	g_async_queue_push_unlocked(queue->to_process, g_new0(struct Workitem*, 1));
-	g_async_queue_unlock(queue->to_process);
-	
 	g_thread_join(queue->thread);
 	g_async_queue_unref(queue->to_process);
 	g_free(queue);

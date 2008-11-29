@@ -31,8 +31,8 @@ struct CacheManager {
 	CMCanDeleteCallback can_delete_callback;
 	gpointer user_context;
 
-	GSList* file_list;
-	GStaticRWLock file_list_rwlock;
+	GSList* cached_file_list;
+	GStaticRWLock cached_file_list_rwlock;
 };
 
 struct CacheItem {
@@ -145,10 +145,10 @@ static void rebuild_cacheitem_list_from_root(struct CacheManager* this, const ch
 	g_dir_close(root);
 
 	/* Switch out the list and trash the old one */
-	g_static_rw_lock_writer_lock(&this->file_list_rwlock);
-	GSList* to_free = this->file_list;
-	this->file_list = ret;
-	g_static_rw_lock_writer_unlock(&this->file_list_rwlock);
+	g_static_rw_lock_writer_lock(&this->cached_file_list_rwlock);
+	GSList* to_free = this->cached_file_list;
+	this->cached_file_list = ret;
+	g_static_rw_lock_writer_unlock(&this->cached_file_list_rwlock);
 
 	cacheitem_free_list(to_free);
 }
@@ -161,7 +161,7 @@ struct CacheManager* cache_manager_new(const char* cache_root, CMCanDeleteCallba
 	ret->cache_root = g_strdup(cache_root);
 	ret->can_delete_callback = callback;  ret->user_context = context;
 
-	g_static_rw_lock_init(&ret->file_list_rwlock);
+	g_static_rw_lock_init(&ret->cached_file_list_rwlock);
 
 	rebuild_cacheitem_list_from_root(ret, cache_root);
 
@@ -181,7 +181,7 @@ void cache_manager_free(struct CacheManager* obj)
 	if (!obj)
 		return;
 
-	cacheitem_free_list(obj->file_list);
+	cacheitem_free_list(obj->cached_file_list);
 	g_free(obj->cache_root);
 	g_free(obj);
 }
@@ -193,13 +193,13 @@ guint64 cache_manager_get_size(struct CacheManager* this)
 
 	/* Run through the list and sum the sizes */
 	guint64 ret = 0;
-	g_static_rw_lock_reader_lock(&this->file_list_rwlock);
-	GSList* iter = this->file_list;
+	g_static_rw_lock_reader_lock(&this->cached_file_list_rwlock);
+	GSList* iter = this->cached_file_list;
 	while (iter) {
 		ret += ((struct CacheItem*)iter->data)->size;
 		iter = g_slist_next(iter);
 	}
-	g_static_rw_lock_reader_unlock(&this->file_list_rwlock);
+	g_static_rw_lock_reader_unlock(&this->cached_file_list_rwlock);
 
 	return ret;
 }
@@ -210,9 +210,9 @@ void cache_manager_notify_added(struct CacheManager* this, const char* full_path
 	if (! (item = cacheitem_new(full_path)) )
 		return;
 
-	g_static_rw_lock_writer_lock(&this->file_list_rwlock);
-	this->file_list = g_slist_insert_sorted(this->file_list, item, cache_item_sortfunc);
-	g_static_rw_lock_writer_unlock(&this->file_list_rwlock);
+	g_static_rw_lock_writer_lock(&this->cached_file_list_rwlock);
+	this->cached_file_list = g_slist_insert_sorted(this->cached_file_list, item, cache_item_sortfunc);
+	g_static_rw_lock_writer_unlock(&this->cached_file_list_rwlock);
 }
 
 guint64 cache_manager_reclaim_space(struct CacheManager* this, guint64 max_size)
@@ -225,8 +225,8 @@ guint64 cache_manager_reclaim_space(struct CacheManager* this, guint64 max_size)
 	guint64 removed_size = 0;
 
 	/* Iterate through the sorted list, looking for files we can delete */
-	g_static_rw_lock_reader_lock(&this->file_list_rwlock);
-	GSList* iter = this->file_list;
+	g_static_rw_lock_reader_lock(&this->cached_file_list_rwlock);
+	GSList* iter = this->cached_file_list;
 	while (iter) {
 		struct CacheItem* item = iter->data;
 
@@ -238,17 +238,17 @@ guint64 cache_manager_reclaim_space(struct CacheManager* this, guint64 max_size)
 
 		iter = g_slist_next(iter);
 	}
-	g_static_rw_lock_reader_unlock(&this->file_list_rwlock);
+	g_static_rw_lock_reader_unlock(&this->cached_file_list_rwlock);
 
 	/* Remove the list of deleted items from the cache manager and free
 	 * the delete list */
-	g_static_rw_lock_writer_lock(&this->file_list_rwlock);
+	g_static_rw_lock_writer_lock(&this->cached_file_list_rwlock);
 	iter = remove_list;
 	while (iter) {
-		this->file_list = g_slist_remove(this->file_list, iter->data);
+		this->cached_file_list = g_slist_remove(this->cached_file_list, iter->data);
 		iter = g_slist_next(iter);
 	}
-	g_static_rw_lock_writer_unlock(&this->file_list_rwlock);
+	g_static_rw_lock_writer_unlock(&this->cached_file_list_rwlock);
 
 	cacheitem_free_list(remove_list);
 
@@ -257,9 +257,9 @@ guint64 cache_manager_reclaim_space(struct CacheManager* this, guint64 max_size)
 
 void cache_manager_touch_file(struct CacheManager* this, const char* full_path)
 {
-	g_static_rw_lock_writer_lock(&this->file_list_rwlock);
+	g_static_rw_lock_writer_lock(&this->cached_file_list_rwlock);
 
-	GSList* iter = this->file_list;
+	GSList* iter = this->cached_file_list;
 	struct CacheItem* item = iter->data;
 	while (iter) {
 		item = iter->data;
@@ -270,8 +270,8 @@ void cache_manager_touch_file(struct CacheManager* this, const char* full_path)
 	}
 
 	if (iter != NULL) {
-		g_slist_remove_link(this->file_list, iter);
+		this->cached_file_list = g_slist_remove_link(this->cached_file_list, iter);
 	}
 
-	g_static_rw_lock_writer_unlock(&this->file_list_rwlock);
+	g_static_rw_lock_writer_unlock(&this->cached_file_list_rwlock);
 }

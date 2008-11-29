@@ -21,6 +21,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
  */
 
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -282,6 +283,7 @@ gboolean can_delete_cached_file(const char* path, gpointer context)
 	return TRUE;
 }
 
+
 /*
  * FUSE callouts
  */
@@ -293,7 +295,7 @@ static void* vcachefs_init(struct fuse_conn_info *conn)
 	mount_object->cache_path = build_cache_path(mount_object->source_path);
 
 	/* TODO: This is actually a config param */
-	mount_object->max_cache_size = 10 * 1024 * 1024;
+	mount_object->max_cache_size = 20 * 1024 * 1024;
 
 	g_thread_init(NULL);
 
@@ -352,6 +354,8 @@ static void vcachefs_destroy(void *mount_object_ptr)
 	g_free(mount_object);
 
 	stats_close_logging(stats_file);
+
+	g_debug("Finished cleanup");
 }
 
 static int vcachefs_getattr(const char *path, struct stat *stbuf)
@@ -459,13 +463,11 @@ out:
 	return (ret < 0 ? -errno : ret);
 }
 
-
 static int vcachefs_statfs(const char *path, struct statvfs *stat)
 {
 	struct vcachefs_mount* mount_obj = get_current_mountinfo();
 	return statvfs(mount_obj->source_path, stat);
 }
-
 
 static int vcachefs_release(const char *path, struct fuse_file_info *info)
 {
@@ -486,7 +488,6 @@ static int vcachefs_release(const char *path, struct fuse_file_info *info)
 
 	return 0;
 }
-
 
 static int vcachefs_access(const char *path, int amode)
 {

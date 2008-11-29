@@ -28,12 +28,16 @@
 #include "queue.h"
 
 typedef gboolean (*CMCanDeleteCallback) (const char* path, gpointer context);
+typedef void (*CMShouldCacheCallback) (const char* path, gpointer context);
+
 struct CacheManager;
 
 struct CacheManager* cache_manager_new(const char* cache_root, CMCanDeleteCallback callback, gpointer context);
 void cache_manager_free(struct CacheManager* obj);
 guint64 cache_manager_get_size(struct CacheManager* this);
 void cache_manager_notify_added(struct CacheManager* this, const char* full_path);
+void cache_manager_notify_opened(struct CacheManager* this, const char* full_path);
 guint64 cache_manager_reclaim_space(struct CacheManager* this, guint64 max_size);
+void cache_manager_touch_file(struct CacheManager* this, const char* full_path);
 
 #endif 
