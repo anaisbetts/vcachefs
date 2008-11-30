@@ -358,6 +358,13 @@ static void vcachefs_destroy(void *mount_object_ptr)
 	g_debug("Finished cleanup");
 }
 
+static int is_quitting(struct vcachefs_mount* mount_obj)
+{
+	return (g_atomic_int_get(&mount_obj->quitflag_atomic) != 0);
+}
+
+/* File ops callouts */
+
 static int vcachefs_getattr(const char *path, struct stat *stbuf)
 {
 	int ret = 0; 
@@ -366,6 +373,10 @@ static int vcachefs_getattr(const char *path, struct stat *stbuf)
 	if(path == NULL || strlen(path) == 0) {
 		return -ENOENT;
 	}
+
+	/* On shutdown, fail new requests */
+	if(is_quitting(mount_obj))
+		return -EIO;
 
 	stats_write_record(stats_file, "getattr", 0, 0, path);
 	if(strcmp(path, "/") == 0) {
@@ -387,6 +398,10 @@ static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 	if(path == NULL || strlen(path) == 0) {
 		return -ENOENT;
 	}
+
+	/* On shutdown, fail new requests */
+	if(is_quitting(mount_obj))
+		return -EIO;
 
 	gchar* full_path = g_build_filename(mount_obj->source_path, &path[1], NULL);
 
@@ -445,9 +460,14 @@ static int vcachefs_read(const char *path, char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi)
 {
 	int ret = 0;
+	struct vcachefs_mount* mount_obj = get_current_mountinfo();
 	struct vcachefs_fdentry* fde = fdentry_from_fd(fi->fh);
 	if(!fde)
 		return -ENOENT;
+
+	/* On shutdown, fail new requests */
+	if(is_quitting(mount_obj))
+		return -EIO;
 
 	/* Let's see if we can do this read from the file cache */
 	if( (ret = read_from_fd(fde->filecache_fd, &fde->filecache_offset, buf, size, offset)) >= 0) {
@@ -466,6 +486,11 @@ out:
 static int vcachefs_statfs(const char *path, struct statvfs *stat)
 {
 	struct vcachefs_mount* mount_obj = get_current_mountinfo();
+
+	/* On shutdown, fail new requests */
+	if(is_quitting(mount_obj))
+		return -EIO;
+
 	return statvfs(mount_obj->source_path, stat);
 }
 
@@ -473,6 +498,10 @@ static int vcachefs_release(const char *path, struct fuse_file_info *info)
 {
 	struct vcachefs_mount* mount_obj = get_current_mountinfo();
 	struct vcachefs_fdentry* fde = NULL;
+
+	/* On shutdown, fail new requests */
+	if(is_quitting(mount_obj))
+		return -EIO;
 
 	/* Remove the entry from the fd table */
 	g_static_rw_lock_writer_lock(&mount_obj->fd_table_rwlock);
@@ -496,6 +525,10 @@ static int vcachefs_access(const char *path, int amode)
 
 	if(path == NULL || strlen(path) == 0)
 		return -ENOENT;
+
+	/* On shutdown, fail new requests */
+	if(is_quitting(mount_obj))
+		return -EIO;
 
 	if(strcmp(path, "/") == 0) {
 		stats_write_record(stats_file, "cached_access", amode, 0, path);
@@ -524,6 +557,10 @@ static int vcachefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
 	if(path == NULL || strlen(path) == 0)
 		return -ENOENT;
+
+	/* On shutdown, fail new requests */
+	if(is_quitting(mount_obj))
+		return -EIO;
 
 	/* Try the source path first; if it's gone, retry with the cache */
 	next_path_try = mount_obj->source_path;

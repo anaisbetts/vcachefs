@@ -47,9 +47,9 @@ struct vcachefs_mount {
 	/* File-based caching */
 	GAsyncQueue* 		file_copy_queue;
 	GThread* 		file_copy_thread;
-	gint 			quitflag_atomic;
 	struct CacheManager* 	cache_manager;
 
+	gint quitflag_atomic;
 	struct WorkitemQueue* work_queue;
 };
 
