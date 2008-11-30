@@ -323,9 +323,22 @@ static void trash_fdtable_item(gpointer key, gpointer val, gpointer dontcare)
 	fdentry_unref((struct vcachefs_fdentry*)val);
 }
 
+static gpointer force_terminate_on_ioblock(gpointer dontcare)
+{
+	sleep(15);
+	kill(0, SIGKILL);
+	return 0;
+}
+
 static void vcachefs_destroy(void *mount_object_ptr)
 {
 	struct vcachefs_mount* mount_object = mount_object_ptr;
+
+	/* Kick off a watchdog thread; this is our last chance to bail; while
+	 * Mac and Linux both support async IO for reads/writes, if a remote FS
+	 * wanders off on an access or readdir call, there's absolutely zilch
+	 * that we can do about it, except for force kill everyone involved. */
+	g_thread_create(force_terminate_on_ioblock, NULL, FALSE, NULL);
 
 	/* Signal the file cache thread to terminate and wait for it
 	 * XXX: if the thread hangs, we're boned - no way to timeout this */

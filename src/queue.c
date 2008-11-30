@@ -115,5 +115,3 @@ gboolean workitem_queue_insert(struct WorkitemQueue* queue, GFunc func, gpointer
 	g_async_queue_push(queue->to_process, obj);
 	return TRUE;
 }
-
-
