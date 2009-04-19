@@ -25,6 +25,8 @@
 #include "stats.h"
 #include "cachemgr.h"
 
+#define CACHEITEM_TAG 'tIaC'
+
 struct CacheManager {
 	char* cache_root;
 
@@ -35,10 +37,17 @@ struct CacheManager {
 	GStaticRWLock cached_file_list_rwlock;
 };
 
-struct CacheItem {
-	char* path;
+/* FIXME: This code is porta-tarded */
+struct CacheItemHeader {
+	unsigned long tag;
+	size_t struct_size;
 	time_t mtime;
-	off_t size;
+	guint64 filesize;
+};
+
+struct CacheItem {
+	struct CacheItemHeader h;
+	char* path;
 };
 
 static struct CacheItem* cacheitem_new(const char* full_path)
@@ -51,9 +60,53 @@ static struct CacheItem* cacheitem_new(const char* full_path)
 
 	struct CacheItem* ret = g_new0(struct CacheItem, 1);
 	ret->path = g_strdup(full_path);
-	ret->mtime = st.st_mtime;
-	ret->size = st.st_size;
+	ret->h.tag = CACHEITEM_TAG;
+	ret->h.mtime = st.st_mtime;
+	ret->h.filesize = st.st_size;
+	ret->h.struct_size = sizeof(struct CacheItemHeader) + ((strlen(full_path) + 1) * sizeof(char));
 	return ret;
+}
+
+static struct CacheItem* cacheitem_load(int fd)
+{
+	char* buf = NULL;
+	struct CacheItem* ret = g_new0(struct CacheItem, 1);
+
+	if(read(fd, ret, sizeof(struct CacheItemHeader)) != sizeof(struct CacheItemHeader))
+		goto failed;
+
+	if(ret->h.tag != CACHEITEM_TAG)
+		goto failed;
+
+	if(ret->h.struct_size <= sizeof(struct CacheItemHeader))
+		goto failed;
+
+	size_t to_read = ret->h.struct_size - sizeof(struct CacheItemHeader);
+	buf = g_new0(char, to_read);
+	if(read(fd, buf, to_read) != to_read)
+		goto failed;
+
+	ret->path = buf;
+	return ret;
+
+failed:
+	if(buf != NULL)
+		g_free(buf);
+	if(ret != NULL)
+		g_free(ret);
+	return NULL;
+}
+
+static int cacheitem_save(int fd, struct CacheItem* obj)
+{
+	if(write(fd, &obj->h, sizeof(struct CacheItemHeader)) != sizeof(struct CacheItemHeader))
+		return -errno;
+
+	size_t to_write = obj->h.struct_size - sizeof(struct CacheItemHeader);
+	if(write(fd, obj->path, to_write) != to_write)
+		return -errno;
+
+	return 0;
 }
 
 static void cacheitem_free(struct CacheItem* obj)
@@ -81,7 +134,7 @@ static void cacheitem_free_list(GSList* to_free)
 
 static void cacheitem_touch(struct CacheItem* this)
 {
-	this->mtime = time(NULL);
+	this->h.mtime = time(NULL);
 
 	/* Attempt to touch the file itself */
 	int fd;
@@ -102,12 +155,12 @@ out:
 
 static gint cache_item_sortfunc(gconstpointer lhs, gconstpointer rhs)
 {
-	time_t lhs_t = ((struct CacheItem*)lhs)->mtime;
-	time_t rhs_t = ((struct CacheItem*)rhs)->mtime;
+	time_t lhs_t = ((struct CacheItem*)lhs)->h.mtime;
+	time_t rhs_t = ((struct CacheItem*)rhs)->h.mtime;
 
 	if (lhs_t == rhs_t)
 		return 0;
-	return (lhs_t < rhs_t ? -1 : 1);
+	return (lhs_t < rhs_t ? 1 : -1);
 }
 
 static void rebuild_cacheitem_list_from_root_helper(GSList** list, const char* root_path, GDir* root)
@@ -196,11 +249,57 @@ guint64 cache_manager_get_size(struct CacheManager* this)
 	g_static_rw_lock_reader_lock(&this->cached_file_list_rwlock);
 	GSList* iter = this->cached_file_list;
 	while (iter) {
-		ret += ((struct CacheItem*)iter->data)->size;
+		ret += ((struct CacheItem*)iter->data)->h.filesize;
 		iter = g_slist_next(iter);
 	}
 	g_static_rw_lock_reader_unlock(&this->cached_file_list_rwlock);
 
+	return ret;
+}
+
+
+int cache_manager_loadstate(struct CacheManager* this, const char* path)
+{
+	int fd;
+	if ((fd = open(path, O_RDONLY)) < 0)
+		return -errno;
+
+	g_static_rw_lock_writer_lock(&this->cached_file_list_rwlock);
+
+	struct CacheItem* item;
+	cacheitem_free_list(this->cached_file_list);
+	while( (item = cacheitem_load(fd)) ) {
+		this->cached_file_list = g_slist_insert_sorted(this->cached_file_list, item, cache_item_sortfunc);
+	}
+
+	g_static_rw_lock_writer_unlock(&this->cached_file_list_rwlock);
+	close(fd);
+	return 0;
+}
+
+int cache_manager_savestate(struct CacheManager* this, const char* path)
+{
+	int ret = 0;
+	int fd;
+	if ((fd = open(path, O_WRONLY)) < 0)
+		return -errno;
+
+	g_static_rw_lock_reader_lock(&this->cached_file_list_rwlock);
+
+	GSList* iter = this->cached_file_list;
+	while (iter) {
+		struct CacheItem* item = iter->data;
+
+		if ((ret = cacheitem_save(fd, item)))
+			goto out;
+
+		iter = g_slist_next(iter);
+	}
+
+	g_static_rw_lock_reader_unlock(&this->cached_file_list_rwlock);
+
+out:
+	close(fd);
 	return ret;
 }
 
@@ -218,22 +317,23 @@ void cache_manager_notify_added(struct CacheManager* this, const char* full_path
 guint64 cache_manager_reclaim_space(struct CacheManager* this, guint64 max_size)
 {
 	guint64 current_size = cache_manager_get_size(this);
-	if (current_size < max_size)
+	if (current_size <= max_size)
 		return 0;
 
 	GSList* remove_list = NULL;
 	guint64 removed_size = 0;
+	guint64 remove_at_least = current_size;
 
 	/* Iterate through the sorted list, looking for files we can delete */
 	g_static_rw_lock_reader_lock(&this->cached_file_list_rwlock);
 	GSList* iter = this->cached_file_list;
-	while (iter) {
+	while (iter && removed_size < remove_at_least) {
 		struct CacheItem* item = iter->data;
 
 		if ( item && (this->can_delete_callback)(item->path, this->user_context) ) {
 			remove_list = g_slist_prepend(remove_list, item);
 			unlink(item->path);
-			removed_size += item->size;
+			removed_size += item->h.filesize;
 		}
 
 		iter = g_slist_next(iter);

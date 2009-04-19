@@ -34,6 +34,8 @@ struct CacheManager;
 
 struct CacheManager* cache_manager_new(const char* cache_root, CMCanDeleteCallback callback, gpointer context);
 void cache_manager_free(struct CacheManager* obj);
+int cache_manager_loadstate(struct CacheManager* obj, const char* path);
+int cache_manager_savestate(struct CacheManager* obj, const char* path);
 guint64 cache_manager_get_size(struct CacheManager* this);
 void cache_manager_notify_added(struct CacheManager* this, const char* full_path);
 void cache_manager_notify_opened(struct CacheManager* this, const char* full_path);
