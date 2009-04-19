@@ -280,7 +280,16 @@ done:
 
 gboolean can_delete_cached_file(const char* path, gpointer context)
 {
-	return TRUE;
+	/* Blowing away files who we have an open handle to is probably bad */
+	struct vcachefs_mount* mount_obj = context;
+	gboolean ret;
+
+	g_static_rw_lock_reader_lock(&mount_obj->fd_table_rwlock);
+	/* FIXME: Relative path? */
+	ret = (g_hash_table_lookup(mount_obj->fd_table_byname, path) != NULL);
+	g_static_rw_lock_reader_unlock(&mount_obj->fd_table_rwlock);
+
+	return ret;
 }
 
 
@@ -301,8 +310,9 @@ static void* vcachefs_init(struct fuse_conn_info *conn)
 
 	stats_file = stats_open_logging();
 
-	/* Create the file descriptor table */
+	/* Create the file descriptor tables */
 	mount_object->fd_table = g_hash_table_new(g_int_hash, g_int_equal);
+	mount_object->fd_table_byname = g_hash_table_new(g_str_hash, g_str_equal);
 	g_static_rw_lock_init(&mount_object->fd_table_rwlock);
 	mount_object->next_fd = 4;
 
@@ -318,16 +328,23 @@ static void* vcachefs_init(struct fuse_conn_info *conn)
 	return mount_object;
 }
 
-static void trash_fdtable_item(gpointer key, gpointer val, gpointer dontcare) 
-{ 
-	fdentry_unref((struct vcachefs_fdentry*)val);
-}
-
 static gpointer force_terminate_on_ioblock(gpointer dontcare)
 {
 	sleep(15);
 	kill(0, SIGKILL);
 	return 0;
+}
+
+static void trash_fdtable_byname_item(gpointer key, gpointer val, gpointer dontcare) 
+{ 
+	GSList* fde_list = val;
+	if (fde_list)
+		g_slist_free(fde_list);
+}
+
+static void trash_fdtable_item(gpointer key, gpointer val, gpointer dontcare) 
+{ 
+	fdentry_unref((struct vcachefs_fdentry*)val);
 }
 
 static void vcachefs_destroy(void *mount_object_ptr)
@@ -360,8 +377,11 @@ static void vcachefs_destroy(void *mount_object_ptr)
 
 	/* XXX: We need to make sure no one is using this before we trash it */
 	g_hash_table_foreach(mount_object->fd_table, trash_fdtable_item, NULL);
+	g_hash_table_foreach(mount_object->fd_table_byname, trash_fdtable_byname_item, NULL);
 	g_hash_table_destroy(mount_object->fd_table);
+	g_hash_table_destroy(mount_object->fd_table_byname);
 	mount_object->fd_table = NULL;
+	mount_object->fd_table_byname = NULL;
 	g_free(mount_object->cache_path);
 	g_free(mount_object->source_path);
 	g_free(mount_object);
@@ -403,6 +423,21 @@ static int vcachefs_getattr(const char *path, struct stat *stbuf)
 	return (ret ? -errno : 0);
 }
 
+static void insert_fdtable_entry(struct vcachefs_mount* mount_obj, struct vcachefs_fdentry* fde)
+{
+	g_hash_table_insert(mount_obj->fd_table, &fde->fd, fde);
+
+	GSList* iter;
+	if ( (iter = g_hash_table_lookup(mount_obj->fd_table_byname, fde->relative_path)) ) {
+		iter = g_slist_alloc();
+		iter->data = fde;
+		g_hash_table_insert(mount_obj->fd_table_byname, fde->relative_path, fde);
+	} else {
+		iter = g_slist_prepend(iter, fde);
+		g_hash_table_replace(mount_obj->fd_table_byname, fde->relative_path, fde);
+	}
+}
+
 static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 {
 	struct vcachefs_mount* mount_obj = get_current_mountinfo();
@@ -424,13 +459,14 @@ static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 
 	/* Open succeeded - time to create a fdentry */
 	fde = fdentry_new();
-	g_static_rw_lock_writer_lock(&mount_obj->fd_table_rwlock);
 	fde->relative_path = g_strdup(path);
 	fde->source_fd = source_fd;
 	fde->source_offset = 0;
+
+	g_static_rw_lock_writer_lock(&mount_obj->fd_table_rwlock);
 	fi->fh = fde->fd = mount_obj->next_fd;
 	mount_obj->next_fd++;
-	g_hash_table_insert(mount_obj->fd_table, &fde->fd, fde);
+	insert_fdtable_entry(mount_obj, fde);
 	g_static_rw_lock_writer_unlock(&mount_obj->fd_table_rwlock);
 
 	/* Try to open the file cached version; if it's not there, add it to the fetch list */
@@ -519,8 +555,20 @@ static int vcachefs_release(const char *path, struct fuse_file_info *info)
 	/* Remove the entry from the fd table */
 	g_static_rw_lock_writer_lock(&mount_obj->fd_table_rwlock);
 	fde = g_hash_table_lookup(mount_obj->fd_table, &info->fh);
-	if (fde)
+	if (fde) {
 		g_hash_table_remove(mount_obj->fd_table, &info->fh);
+		GSList* iter = g_hash_table_lookup(mount_obj->fd_table_byname, fde->relative_path);
+		if (iter) {
+			iter = g_slist_remove(iter, fde);
+		}
+
+		if (!iter) {
+			g_hash_table_remove(mount_obj->fd_table_byname, fde->relative_path);
+		} else {
+			g_hash_table_replace(mount_obj->fd_table_byname, fde->relative_path, iter);
+		}
+	}
+
 	g_static_rw_lock_writer_unlock(&mount_obj->fd_table_rwlock);
 
 	if(!fde)

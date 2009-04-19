@@ -296,9 +296,9 @@ int cache_manager_savestate(struct CacheManager* this, const char* path)
 		iter = g_slist_next(iter);
 	}
 
+out:
 	g_static_rw_lock_reader_unlock(&this->cached_file_list_rwlock);
 
-out:
 	close(fd);
 	return ret;
 }

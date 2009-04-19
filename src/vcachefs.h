@@ -41,6 +41,7 @@ struct vcachefs_mount {
 	
 	/* File descriptor table */
 	GHashTable* 	fd_table;
+	GHashTable* 	fd_table_byname;
 	uint 		next_fd;
 	GStaticRWLock 	fd_table_rwlock;
 
