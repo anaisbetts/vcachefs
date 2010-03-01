@@ -132,6 +132,7 @@ static void cacheitem_free_list(GSList* to_free)
 	g_slist_free(to_free);
 }
 
+#if FALSE
 static void cacheitem_touch(struct CacheItem* this)
 {
 	this->h.mtime = time(NULL);
@@ -152,6 +153,8 @@ out:
 	if (fd >= 0)
 		close(fd);
 }
+
+#endif
 
 static gint cache_item_sortfunc(gconstpointer lhs, gconstpointer rhs)
 {

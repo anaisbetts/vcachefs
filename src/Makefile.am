@@ -2,7 +2,7 @@
 
 INCLUDES = \
 	-DFUSE_USE_VERSION=27 \
-	-I. -Wall \
+	-I. -Wall -Werror \
 	$(VCACHEFS_CFLAGS)			
 
 bin_PROGRAMS = vcachefs
