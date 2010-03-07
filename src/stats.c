@@ -33,21 +33,23 @@
 #include <dirent.h>
 #include <unistd.h>
 
+#include <fuse.h>
 #include <glib.h>
 
 #include "stats.h"
 #include "config.h"
 
-#ifdef USE_IOSTATS
-
 GIOChannel* stats_open_logging(void)
 {
-	gchar* path = g_strdup_printf("/tmp/%u.csv", (unsigned int)getpid());
+	char* path = getenv("VCACHEFS_STATS_FILE");
+	if (!path)
+		return NULL;
+
 	GIOChannel* ret = g_io_channel_new_file(path, "w", NULL);
 
 	if (ret) {
 		gsize dontcare;
-		g_io_channel_write_chars(ret, "Timecode, Operation, Offset, Size, Info\n", -1, &dontcare, NULL);
+		g_io_channel_write_chars(ret, "Timecode,Operation,Offset,Size,Info,Pid\n", -1, &dontcare, NULL);
 	}
 
 	g_free(path);
@@ -69,11 +71,15 @@ int stats_write_record(GIOChannel* channel, const char* operation, off_t offset,
 
 	const char* safe_info = (info ? info : "");
 
+	struct fuse_context* ctx = fuse_get_context(); 
+
 	gchar* buf;
 	if (sizeof(off_t) == 8) {
-	 	buf = g_strdup_printf("%llu, \"%s\", %llu, %lu, \"%s\"\n", get_time_code(), operation, (unsigned long long)offset, size, safe_info);
+	 	buf = g_strdup_printf("%llu,\"%s\",%llu,%lu,\"%s\",%u\n", 
+			get_time_code(), operation, (unsigned long long)offset, size, safe_info, ctx->pid);
 	} else {
-	 	buf = g_strdup_printf("%llu, \"%s\", %lu, %lu, \"%s\"\n", get_time_code(), operation, (unsigned long)offset, size, safe_info);
+	 	buf = g_strdup_printf("%llu,\"%s\",%lu,%lu,\"%s\",%u\n", 
+			get_time_code(), operation, (unsigned long)offset, size, safe_info, ctx->pid);
 	}
 
 	gsize dontcare;
@@ -91,5 +97,3 @@ long long unsigned int get_time_code(void)
 	unsigned long long ret = t.tv_sec * 1000 * 1000 + t.tv_usec;
 	return ret;
 }
-
-#endif
