@@ -297,13 +297,12 @@ static void insert_fdtable_entry(struct vcachefs_mount* mount_obj, struct vcache
 	g_hash_table_insert(mount_obj->fd_table, &fde->fd, fde);
 
 	GSList* iter;
-	if ( (iter = g_hash_table_lookup(mount_obj->fd_table_byname, fde->relative_path)) ) {
-		iter = g_slist_alloc();
-		iter->data = fde;
-		g_hash_table_insert(mount_obj->fd_table_byname, fde->relative_path, fde);
+	if ( !(iter = g_hash_table_lookup(mount_obj->fd_table_byname, fde->relative_path)) ) {
+		iter = g_slist_prepend(iter, fde);
+		g_hash_table_insert(mount_obj->fd_table_byname, fde->relative_path, iter);
 	} else {
 		iter = g_slist_prepend(iter, fde);
-		g_hash_table_replace(mount_obj->fd_table_byname, fde->relative_path, fde);
+		g_hash_table_replace(mount_obj->fd_table_byname, fde->relative_path, iter);
 	}
 }
 
@@ -572,7 +571,10 @@ static int vcachefs_release(const char *path, struct fuse_file_info *info)
 			iter = g_slist_remove(iter, fde);
 		}
 
+		/* Update the table to point to the correct SList */
+
 		if (!iter) {
+			/* If the SList is empty, remove the entire relative path */
 			g_hash_table_remove(mount_obj->fd_table_byname, fde->relative_path);
 		} else {
 			g_hash_table_replace(mount_obj->fd_table_byname, fde->relative_path, iter);
