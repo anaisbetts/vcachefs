@@ -52,7 +52,6 @@ GIOChannel* stats_open_logging(void)
 		g_io_channel_write_chars(ret, "Timecode,Operation,Offset,Size,Info,Pid\n", -1, &dontcare, NULL);
 	}
 
-	g_free(path);
 	return ret;
 }
 
