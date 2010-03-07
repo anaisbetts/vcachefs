@@ -71,7 +71,7 @@ int stats_write_record(GIOChannel* channel, const char* operation, off_t offset,
 
 	gchar* buf;
 	if (sizeof(off_t) == 8) {
-	 	buf = g_strdup_printf("%llu, \"%s\", %llu, %lu, \"%s\"\n", get_time_code(), operation, offset, size, safe_info);
+	 	buf = g_strdup_printf("%llu, \"%s\", %llu, %lu, \"%s\"\n", get_time_code(), operation, (unsigned long long)offset, size, safe_info);
 	} else {
 	 	buf = g_strdup_printf("%llu, \"%s\", %lu, %lu, \"%s\"\n", get_time_code(), operation, (unsigned long)offset, size, safe_info);
 	}

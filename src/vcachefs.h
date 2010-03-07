@@ -38,6 +38,7 @@ struct vcachefs_mount {
 	char* 	source_path;
 	char* 	cache_path;
 	gulong 	max_cache_size;
+	int 	pass_through;
 	
 	/* File descriptor table */
 	GHashTable* 	fd_table;

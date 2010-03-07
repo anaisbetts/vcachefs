@@ -292,6 +292,41 @@ gboolean can_delete_cached_file(const char* path, gpointer context)
 	return ret;
 }
 
+static void insert_fdtable_entry(struct vcachefs_mount* mount_obj, struct vcachefs_fdentry* fde)
+{
+	g_hash_table_insert(mount_obj->fd_table, &fde->fd, fde);
+
+	GSList* iter;
+	if ( (iter = g_hash_table_lookup(mount_obj->fd_table_byname, fde->relative_path)) ) {
+		iter = g_slist_alloc();
+		iter->data = fde;
+		g_hash_table_insert(mount_obj->fd_table_byname, fde->relative_path, fde);
+	} else {
+		iter = g_slist_prepend(iter, fde);
+		g_hash_table_replace(mount_obj->fd_table_byname, fde->relative_path, fde);
+	}
+}
+
+static gpointer force_terminate_on_ioblock(gpointer dontcare)
+{
+	sleep(15);
+	kill(0, SIGKILL);
+	return 0;
+}
+
+static void trash_fdtable_byname_item(gpointer key, gpointer val, gpointer dontcare) 
+{ 
+	GSList* fde_list = val;
+	if (fde_list)
+		g_slist_free(fde_list);
+}
+
+static void trash_fdtable_item(gpointer key, gpointer val, gpointer dontcare) 
+{ 
+	fdentry_unref((struct vcachefs_fdentry*)val);
+}
+
+
 
 /*
  * FUSE callouts
@@ -305,6 +340,9 @@ static void* vcachefs_init(struct fuse_conn_info *conn)
 
 	/* TODO: This is actually a config param */
 	mount_object->max_cache_size = 20 * 1024 * 1024;
+
+	if (getenv("VCACHEFS_PASSTHROUGH"))
+		mount_object->pass_through = 1;
 
 	g_thread_init(NULL);
 
@@ -326,25 +364,6 @@ static void* vcachefs_init(struct fuse_conn_info *conn)
 	stats_write_record(stats_file, "init_target", 0, 0, mount_object->cache_path);
 
 	return mount_object;
-}
-
-static gpointer force_terminate_on_ioblock(gpointer dontcare)
-{
-	sleep(15);
-	kill(0, SIGKILL);
-	return 0;
-}
-
-static void trash_fdtable_byname_item(gpointer key, gpointer val, gpointer dontcare) 
-{ 
-	GSList* fde_list = val;
-	if (fde_list)
-		g_slist_free(fde_list);
-}
-
-static void trash_fdtable_item(gpointer key, gpointer val, gpointer dontcare) 
-{ 
-	fdentry_unref((struct vcachefs_fdentry*)val);
 }
 
 static void vcachefs_destroy(void *mount_object_ptr)
@@ -423,21 +442,6 @@ static int vcachefs_getattr(const char *path, struct stat *stbuf)
 	return (ret ? -errno : 0);
 }
 
-static void insert_fdtable_entry(struct vcachefs_mount* mount_obj, struct vcachefs_fdentry* fde)
-{
-	g_hash_table_insert(mount_obj->fd_table, &fde->fd, fde);
-
-	GSList* iter;
-	if ( (iter = g_hash_table_lookup(mount_obj->fd_table_byname, fde->relative_path)) ) {
-		iter = g_slist_alloc();
-		iter->data = fde;
-		g_hash_table_insert(mount_obj->fd_table_byname, fde->relative_path, fde);
-	} else {
-		iter = g_slist_prepend(iter, fde);
-		g_hash_table_replace(mount_obj->fd_table_byname, fde->relative_path, fde);
-	}
-}
-
 static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 {
 	struct vcachefs_mount* mount_obj = get_current_mountinfo();
@@ -469,6 +473,9 @@ static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 	insert_fdtable_entry(mount_obj, fde);
 	g_static_rw_lock_writer_unlock(&mount_obj->fd_table_rwlock);
 
+	if (mount_obj->pass_through)
+		goto out;
+
 	/* Try to open the file cached version; if it's not there, add it to the fetch list */
 	if( (fde->filecache_fd = try_open_from_cache(mount_obj->cache_path, path, fi->flags)) == -1 && errno == ENOENT) {
 		g_async_queue_push(mount_obj->file_copy_queue, g_strdup(path));
@@ -481,6 +488,8 @@ static int vcachefs_open(const char *path, struct fuse_file_info *fi)
 		g_free(full_cache_path);
 	}
 
+out:
+	
 	/* FUSE handles this differently */
 	stats_write_record(stats_file, "open", 0, 0, path);
 	return 0;
@@ -519,7 +528,8 @@ static int vcachefs_read(const char *path, char *buf, size_t size, off_t offset,
 		return -EIO;
 
 	/* Let's see if we can do this read from the file cache */
-	if( (ret = read_from_fd(fde->filecache_fd, &fde->filecache_offset, buf, size, offset)) >= 0) {
+	if (!mount_obj->pass_through &&
+	    (ret = read_from_fd(fde->filecache_fd, &fde->filecache_offset, buf, size, offset)) >= 0) {
 		stats_write_record(stats_file, "cached_read", size, offset, path);
 		goto out;
 	}
@@ -591,7 +601,7 @@ static int vcachefs_access(const char *path, int amode)
 	if(is_quitting(mount_obj))
 		return -EIO;
 
-	if(strcmp(path, "/") == 0) {
+	if(!mount_obj->pass_through && strcmp(path, "/") == 0) {
 		stats_write_record(stats_file, "cached_access", amode, 0, path);
 		return access(mount_obj->source_path, amode);
 	}
@@ -636,7 +646,7 @@ static int vcachefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		if ((dir = opendir(full_path)) != NULL) 
 			break;
 
-		next_path_try = (next_path_try == mount_obj->source_path ?
+		next_path_try = (next_path_try == mount_obj->source_path && !mount_obj->pass_through ?
 				 mount_obj->cache_path : NULL);
 		g_free(full_path);
 	}
@@ -651,7 +661,7 @@ static int vcachefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	stats_write_record(stats_file, "readdir", offset, 0, path);
 
 	/* mkdir -p the cache directory */
-	if(strcmp(path, "/") != 0) {
+	if(strcmp(path, "/") != 0 && !mount_obj->pass_through) {
 		char* cache_path = g_build_filename(mount_obj->cache_path, &path[1], NULL);
 		g_mkdir_with_parents(cache_path, 5+7*8+7*8*8);
 		g_free(cache_path);
